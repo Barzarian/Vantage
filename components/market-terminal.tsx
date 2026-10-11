@@ -133,7 +133,7 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500"><LayoutGrid size={13} /> Market overview</div>
-            <h1 className="text-xl font-medium tracking-tight text-slate-100">Good morning, Jordan</h1>
+            <h1 className="text-xl font-medium tracking-tight text-slate-100">Good morning</h1>
             <p className="mt-1 text-xs text-slate-500">Your markets at a glance. Data is simulated for demonstration.</p>
           </div>
           <div className="flex items-center gap-2">
