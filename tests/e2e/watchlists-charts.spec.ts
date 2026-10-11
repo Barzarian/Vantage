@@ -13,7 +13,15 @@ test("search, reorder, chart controls, and saved layout survive reload", async (
   await metaResult.click();
   await expect(page.getByTestId("watchlist-row-META")).toBeVisible();
 
-  await page.getByRole("button", { name: "Reorder META" }).dragTo(page.getByTestId("watchlist-row-AAPL"));
+  const handle = page.getByTestId("watchlist-row-META").getByRole("button", { name: "Reorder META" });
+  const sourceBox = await handle.boundingBox();
+  const targetBox = await page.getByTestId("watchlist-row-AAPL").boundingBox();
+  if (!sourceBox || !targetBox) throw new Error("Could not locate watchlist drag targets.");
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + sourceBox.height / 2, { steps: 3 });
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 8 });
+  await page.mouse.up();
   const rows = page.locator("tbody tr[data-testid^='watchlist-row-']");
   await expect(rows.first()).toHaveAttribute("data-testid", "watchlist-row-META");
 
@@ -28,8 +36,10 @@ test("search, reorder, chart controls, and saved layout survive reload", async (
 
   await page.getByRole("button", { name: "4 chart layout" }).click();
   await expect(page.getByTestId("price-chart-3")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("vantage.chart.preferences"))).toContain("SMA");
   await page.waitForTimeout(700);
   await page.reload();
+  console.log("Chart prefs after reload:", await page.evaluate(() => localStorage.getItem("vantage.chart.preferences")), page.url());
   await expect(page.getByTestId("layout-4")).toHaveClass(/bg-emerald-400/);
   await expect(page.getByTestId("price-chart-3")).toBeVisible();
   await expect(page.getByText(/SMA 20/).first()).toBeVisible();

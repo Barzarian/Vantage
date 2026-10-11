@@ -6,28 +6,14 @@ import {
   savedWatchlistPreferences,
 } from "@/db/schema";
 import {
-  defaultWatchlistPreferences,
+  defaultUserPreferences,
   userPreferencesSchema,
   type UserPreferences,
 } from "./preferences";
 
 const USER_ID = "local-user";
 
-const defaults: UserPreferences = {
-  watchlist: defaultWatchlistPreferences,
-  chart: {
-    layout: "1",
-    panes: [{
-      symbol: "AAPL",
-      timeframe: "1m",
-      range: "1D",
-      type: "candlestick",
-      indicators: [],
-    }],
-    syncCrosshair: true,
-    syncTimeRange: false,
-  },
-};
+const defaults: UserPreferences = defaultUserPreferences;
 
 declare global {
   var localUserPreferences: UserPreferences | undefined;
@@ -106,5 +92,3 @@ export async function saveUserPreferences(value: UserPreferences): Promise<UserP
   ]);
   return preferences;
 }
-
-export { defaults as defaultUserPreferences };

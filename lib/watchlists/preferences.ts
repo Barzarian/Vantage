@@ -65,6 +65,24 @@ export const defaultWatchlistPreferences: WatchlistPreferences = {
   visible: ["symbol", "name", "last", "change", "changePercent", "bid", "ask", "volume", "dayRange", "sparkline"],
 };
 
+export const defaultChartPreferences: ChartPreferences = {
+  layout: "1",
+  panes: [{
+    symbol: "AAPL",
+    timeframe: "1m",
+    range: "1D",
+    type: "candlestick",
+    indicators: [],
+  }],
+  syncCrosshair: true,
+  syncTimeRange: false,
+};
+
+export const defaultUserPreferences: UserPreferences = {
+  watchlist: defaultWatchlistPreferences,
+  chart: defaultChartPreferences,
+};
+
 export function formatPrice(value: number, symbol: string, assetClass: string): string {
   let digits = 2;
   if (assetClass === "future") {

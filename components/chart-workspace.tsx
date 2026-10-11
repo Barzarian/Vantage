@@ -7,11 +7,11 @@ import { Activity, Columns2, LayoutGrid, Plus, Settings2 } from "lucide-react";
 import {
   chartPreferencesSchema,
   chartPaneSchema,
+  defaultUserPreferences,
   userPreferencesSchema,
   type ChartPaneConfig,
   type ChartPreferences,
 } from "@/lib/watchlists/preferences";
-import { defaultUserPreferences } from "@/lib/watchlists/user-preferences";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./theme-toggle";
 

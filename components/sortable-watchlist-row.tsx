@@ -48,7 +48,6 @@ export function SortableWatchlistRow(props: Props) {
       dragHandle={dragHandle}
       rowRef={setNodeRef}
       rowStyle={rowStyle}
-      rowAttributes={attributes}
       virtualStart={props.virtualStart}
     />
   );

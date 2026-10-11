@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = "http://127.0.0.1:3000";
+const baseURL = "http://127.0.0.1:3100";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -14,7 +14,7 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: {
-    command: "pnpm dev",
+    command: "pnpm dev --port 3100",
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
