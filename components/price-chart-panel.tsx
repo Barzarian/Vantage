@@ -62,7 +62,18 @@ type Props = {
   syncTimeRange: boolean;
   onCrosshair?: (time: number | null) => void;
   synchronizedTime?: number | null;
+  onVisibleRange?: (range: { from: Time; to: Time } | null) => void;
+  synchronizedRange?: { from: Time; to: Time } | null;
 };
+
+function chartTimeToEpoch(time: Time): number | null {
+  if (typeof time === "number") return time;
+  if (typeof time === "string") {
+    const epoch = Date.parse(`${time}T00:00:00Z`);
+    return Number.isNaN(epoch) ? null : Math.floor(epoch / 1000);
+  }
+  return Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+}
 
 function rangeStart(range: ChartPaneConfig["range"], to: number): number {
   if (range === "YTD") return Math.floor(Date.UTC(new Date(to * 1000).getUTCFullYear(), 0, 1) / 1000);
@@ -150,6 +161,8 @@ export function PriceChartPanel({
   syncTimeRange,
   onCrosshair,
   synchronizedTime,
+  onVisibleRange,
+  synchronizedRange,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -158,9 +171,14 @@ export function PriceChartPanel({
   const compareSeries = useRef<ISeriesApi<"Line"> | null>(null);
   const lastPriceLine = useRef<IPriceLine | null>(null);
   const loadingOlder = useRef(false);
+  const exhaustedHistoryAt = useRef<number | null>(null);
   const chartDataRef = useRef<Bar[]>([]);
   const queryPendingRef = useRef(true);
   const initialFit = useRef(false);
+  const syncTimeRangeRef = useRef(syncTimeRange);
+  const paneIndexRef = useRef(paneIndex);
+  const onCrosshairRef = useRef(onCrosshair);
+  const onVisibleRangeRef = useRef(onVisibleRange);
   const [olderBars, setOlderBars] = useState<Bar[]>([]);
   const [liveBar, setLiveBar] = useState<Bar | null>(null);
   const [hoveredBar, setHoveredBar] = useState<Bar | null>(null);
@@ -194,6 +212,13 @@ export function PriceChartPanel({
     queryPendingRef.current = query.isPending;
   }, [chartData, query.isPending]);
 
+  useEffect(() => {
+    syncTimeRangeRef.current = syncTimeRange;
+    paneIndexRef.current = paneIndex;
+    onCrosshairRef.current = onCrosshair;
+    onVisibleRangeRef.current = onVisibleRange;
+  }, [onCrosshair, onVisibleRange, paneIndex, syncTimeRange]);
+
   const updateConfig = (patch: Partial<ChartPaneConfig>) => {
     if (
       (patch.symbol !== undefined && patch.symbol !== config.symbol) ||
@@ -202,6 +227,7 @@ export function PriceChartPanel({
     ) {
       setOlderBars([]);
       loadingOlder.current = false;
+      exhaustedHistoryAt.current = null;
       initialFit.current = false;
     }
     onChange({ ...config, ...patch });
@@ -211,6 +237,7 @@ export function PriceChartPanel({
     const current = chartDataRef.current;
     if (!current.length || loadingOlder.current) return;
     const earliest = current[0]!.time;
+    if (exhaustedHistoryAt.current !== null && earliest >= exhaustedHistoryAt.current) return;
     const params = new URLSearchParams({
       symbol: config.symbol,
       timeframe: config.timeframe,
@@ -228,7 +255,8 @@ export function PriceChartPanel({
           : "Could not load older bars.";
         throw new Error(message);
       }
-      const older = barSchema.array().parse(payload);
+      const older = barSchema.array().parse(payload).filter((bar) => bar.time < earliest);
+      if (!older.length) exhaustedHistoryAt.current = earliest;
       setOlderBars((existing) => [...new Map([...older, ...existing].map((bar) => [bar.time, bar])).values()]);
       setChartError("");
     } catch (error) {
@@ -339,14 +367,14 @@ export function PriceChartPanel({
     chart.subscribeCrosshairMove((param) => {
       if (!param.time) {
         setHoveredBar(null);
-        onCrosshair?.(null);
+        onCrosshairRef.current?.(null);
         return;
       }
-      const time = typeof param.time === "number" ? param.time : null;
-      if (time !== null) {
-        const bar = chartDataRef.current.find((entry) => entry.time === time);
+      const epoch = chartTimeToEpoch(param.time);
+      if (epoch !== null) {
+        const bar = chartDataRef.current.find((entry) => entry.time === epoch);
         setHoveredBar(bar ?? null);
-        onCrosshair?.(time);
+        onCrosshairRef.current?.(epoch);
       }
     });
     chart.timeScale().subscribeVisibleLogicalRangeChange((visible: LogicalRange | null) => {
@@ -355,8 +383,8 @@ export function PriceChartPanel({
       void loadOlder();
     });
     chart.timeScale().subscribeVisibleTimeRangeChange((visible) => {
-      if (!syncTimeRange || !visible || paneIndex > 0) return;
-      onCrosshair?.(typeof visible.from === "number" ? visible.from : null);
+      if (!syncTimeRangeRef.current || !visible || paneIndexRef.current > 0) return;
+      onVisibleRangeRef.current?.({ from: visible.from, to: visible.to });
     });
     return () => {
       resize.disconnect();
@@ -370,6 +398,11 @@ export function PriceChartPanel({
     // Chart lifecycle changes only when its structural options change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.symbol, config.timeframe, config.type, chartType, config.compareSymbol, compareBars.length, linearScale, loadOlder]);
+
+  useEffect(() => {
+    if (!bars.length) return;
+    marketStreamManager.seedBar(config.symbol, config.timeframe, bars.at(-1)!);
+  }, [bars, config.symbol, config.timeframe]);
 
   useEffect(() => {
     const series = priceSeries.current;
@@ -410,17 +443,17 @@ export function PriceChartPanel({
   }, [config.symbol, config.timeframe]);
 
   useEffect(() => {
-    if (!syncTimeRange || paneIndex === 0 || !chartRef.current || synchronizedTime === undefined || synchronizedTime === null) return;
-    const index = chartData.findIndex((bar) => bar.time >= synchronizedTime);
-    if (index >= 0) {
-      const width = chartRef.current.timeScale().getVisibleLogicalRange();
-      if (width) chartRef.current.timeScale().setVisibleLogicalRange({ from: index, to: index + (width.to - width.from) });
-    }
-  }, [chartData, paneIndex, syncTimeRange, synchronizedTime]);
+    if (!syncTimeRange || paneIndex === 0 || !chartRef.current || !synchronizedRange) return;
+    const current = chartRef.current.timeScale().getVisibleRange();
+    if (current && current.from === synchronizedRange.from && current.to === synchronizedRange.to) return;
+    chartRef.current.timeScale().setVisibleRange(synchronizedRange);
+  }, [paneIndex, syncTimeRange, synchronizedRange]);
 
   useEffect(() => {
     if (!syncCrosshair || paneIndex === 0 || synchronizedTime === undefined || synchronizedTime === null) return;
-    const bar = chartData.find((entry) => entry.time === synchronizedTime);
+    const bar = chartData.reduce<Bar | undefined>((nearest, entry) =>
+      !nearest || Math.abs(entry.time - synchronizedTime) < Math.abs(nearest.time - synchronizedTime) ? entry : nearest,
+    undefined);
     const chart = chartRef.current;
     const series = priceSeries.current;
     if (bar && chart && series) chart.setCrosshairPosition(bar.close, bar.time as Time, series);
@@ -537,6 +570,8 @@ export function PriceChartPanel({
             {latestQuote ? `${latestQuote.change >= 0 ? "+" : ""}${latestQuote.change.toFixed(2)} (${latestQuote.changePercent.toFixed(2)}%)` : ""}
           </span>
           {quoteSnapshot?.stale && <span className="rounded bg-amber-400/10 px-1 py-0.5 text-[9px] text-amber-300">STALE</span>}
+          {latestQuote?.dataType === "delayed" && <span className="rounded bg-amber-400/10 px-1 py-0.5 text-[9px] text-amber-300">DELAYED</span>}
+          {latestQuote?.dataType === "frozen" && <span className="rounded bg-slate-500/20 px-1 py-0.5 text-[9px] text-slate-400">FROZEN</span>}
         </div>
         <div className="flex flex-wrap items-center gap-1">
           <select aria-label="Chart type" value={config.type} onChange={(event) => updateConfig({ type: chartTypeSchema.parse(event.target.value) })} className="h-7 rounded border border-[var(--border)] bg-[#0a0d11] px-2 text-[10px]">

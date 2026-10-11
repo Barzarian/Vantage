@@ -5,6 +5,17 @@ import { formatPrice } from "../../lib/watchlists/preferences";
 import { reorderByIds, WatchlistError } from "../../lib/watchlists/model";
 import { sessionVolumeWeightedAveragePrice } from "../../lib/indicators";
 import type { Quote } from "../../lib/market-data/schemas";
+import {
+  addWatchlistItem,
+  createWatchlist,
+  deleteWatchlist,
+  duplicateWatchlist,
+  getWatchlists,
+  removeWatchlistItem,
+  renameWatchlist,
+  reorderWatchlistItems,
+  updateWatchlistItem,
+} from "../../lib/watchlists/service";
 
 function quote(symbol: string, last: number): Quote {
   return {
@@ -73,5 +84,36 @@ describe("watchlist/chart utility behavior", () => {
     expect(aggregator.update("ES", "1m", 1_860, 5002, 1)).toMatchObject({
       time: 1_860, open: 5002, high: 5002, low: 5002, close: 5002, volume: 1,
     });
+
+  });
+
+  it("supports watchlist CRUD, item edits, moves, and reorder in mock mode", async () => {
+    vi.stubEnv("DATABASE_URL", "");
+    globalThis.inMemoryWatchlists = undefined;
+    try {
+      const [core, macro] = await getWatchlists();
+      const created = await createWatchlist("Research");
+      const item = await addWatchlistItem(created.id, { symbol: "META", assetClass: "stock", note: "" });
+      const another = await addWatchlistItem(created.id, { symbol: "AMD", assetClass: "stock", note: "" });
+      await updateWatchlistItem(created.id, item.id, { note: "earnings" });
+      expect((await getWatchlists()).find((list) => list.id === created.id)?.items.map((entry) => entry.id))
+        .toEqual([item.id, another.id]);
+      await reorderWatchlistItems(created.id, [another.id, item.id]);
+      expect((await getWatchlists()).find((list) => list.id === created.id)?.items.map((entry) => entry.id))
+        .toEqual([another.id, item.id]);
+      await updateWatchlistItem(created.id, item.id, { watchlistId: macro!.id, note: "moved" });
+      expect((await getWatchlists()).find((list) => list.id === macro!.id)?.items.at(-1)?.symbol).toBe("META");
+      const renamed = await renameWatchlist(created.id, "Research 2");
+      expect(renamed.name).toBe("Research 2");
+      const duplicate = await duplicateWatchlist(created.id);
+      expect(duplicate.items.map((entry) => entry.symbol)).toEqual(["AMD"]);
+      await removeWatchlistItem(created.id, another.id);
+      await deleteWatchlist(created.id);
+      expect((await getWatchlists()).some((list) => list.id === created.id)).toBe(false);
+      expect(core?.name).toBe("Core");
+    } finally {
+      vi.unstubAllEnvs();
+      globalThis.inMemoryWatchlists = undefined;
+    }
   });
 });

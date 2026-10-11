@@ -3,8 +3,19 @@ import { ZodError, type ZodType } from "zod";
 import { WatchlistError } from "./model";
 
 export async function parseJson<T>(request: Request, schema: ZodType<T>): Promise<T> {
-  const input: unknown = await request.json();
+  const input = await readJsonBody(request);
   return schema.parse(input);
+}
+
+export async function readJsonBody(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new WatchlistError("Request body must contain valid JSON.", 400, "INVALID_JSON");
+    }
+    throw error;
+  }
 }
 
 export function watchlistErrorResponse(error: unknown): NextResponse {

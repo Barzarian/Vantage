@@ -608,7 +608,7 @@ export function WatchlistsPage() {
             return item ? <div className="flex h-full min-h-[560px] flex-col">
               <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
                 <div><div className="text-[10px] uppercase tracking-wider text-slate-500">Selected instrument</div><div className="mt-1 text-sm font-semibold">{item.symbol} <span className="font-normal text-slate-500">{quote?.name}</span></div></div>
-                <Link href={`/chart/${encodeURIComponent(item.symbol)}`} className="rounded border border-[var(--border)] px-2.5 py-1.5 text-[10px] text-slate-300 hover:text-white">Open full chart</Link>
+                <Link href={`/chart/${encodeURIComponent(item.symbol)}?timeframe=${chartConfig?.symbol === item.symbol ? chartConfig.timeframe : "1m"}`} className="rounded border border-[var(--border)] px-2.5 py-1.5 text-[10px] text-slate-300 hover:text-white">Open full chart</Link>
               </div>
               {quote && <div className="flex items-end gap-3 px-4 pt-4"><span className="font-mono text-2xl">{formatPrice(quote.last, item.symbol, item.assetClass)}</span><span className={cn("font-mono text-xs", quote.change >= 0 ? "text-emerald-400" : "text-rose-400")}>{quote.change >= 0 ? "+" : ""}{quote.change.toFixed(2)} ({quote.changePercent.toFixed(2)}%)</span></div>}
               <div className="flex-1">

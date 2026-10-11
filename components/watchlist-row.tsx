@@ -116,7 +116,12 @@ function WatchlistRowComponent({
     }
     switch (column) {
       case "symbol":
-        return <span className="font-semibold text-slate-100">{item.symbol}{snapshot?.stale && <span className="ml-1 text-[9px] text-amber-400">STALE</span>}</span>;
+        return <span className="font-semibold text-slate-100">
+          {item.symbol}
+          {snapshot?.stale && <span className="ml-1 text-[9px] text-amber-400">STALE</span>}
+          {quote.dataType === "delayed" && <span className="ml-1 rounded bg-amber-400/10 px-1 text-[9px] text-amber-300">DELAYED</span>}
+          {quote.dataType === "frozen" && <span className="ml-1 rounded bg-slate-500/20 px-1 text-[9px] text-slate-400">FROZEN</span>}
+        </span>;
       case "name": return <span className="max-w-36 truncate text-slate-400">{quote.name}</span>;
       case "last": return <span className="font-mono text-slate-100">{formatPrice(quote.last, item.symbol, item.assetClass)}</span>;
       case "change": return <span className={cn("font-mono", quote.change >= 0 ? "text-emerald-400" : "text-rose-400")}>{quote.change >= 0 ? "+" : ""}{quote.change.toFixed(2)}</span>;

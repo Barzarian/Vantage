@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { updateItemSchema } from "@/lib/watchlists/model";
+import { updateItemSchema, watchlistItemIdParamsSchema } from "@/lib/watchlists/model";
 import {
   removeWatchlistItem,
   updateWatchlistItem,
@@ -11,7 +11,7 @@ type RouteContext = { params: Promise<{ watchlistId: string; itemId: string }> }
 export async function PATCH(request: Request, { params }: RouteContext) {
   try {
     const [{ watchlistId, itemId }, input] = await Promise.all([
-      params,
+      params.then((rawParams) => watchlistItemIdParamsSchema.parse(rawParams)),
       parseJson(request, updateItemSchema),
     ]);
     return NextResponse.json({
@@ -24,7 +24,7 @@ export async function PATCH(request: Request, { params }: RouteContext) {
 
 export async function DELETE(_request: Request, { params }: RouteContext) {
   try {
-    const { watchlistId, itemId } = await params;
+    const { watchlistId, itemId } = watchlistItemIdParamsSchema.parse(await params);
     await removeWatchlistItem(watchlistId, itemId);
     return new NextResponse(null, { status: 204 });
   } catch (error) {

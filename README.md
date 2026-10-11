@@ -42,7 +42,7 @@ pnpm test
 pnpm test:e2e
 ```
 
-The unit suite covers Black-Scholes Greeks, SMA/EMA/RSI/MACD/Bollinger Bands/VWAP, realized and unrealized P&L, and stock/options/futures contract multipliers. Playwright smoke tests live in `tests/e2e`; currently there is one main application page (`/`), so the smoke suite covers the market overview, watchlist, and informational disclaimer.
+The unit suite covers Black-Scholes Greeks, SMA/EMA/RSI/MACD/Bollinger Bands/VWAP, realized and unrealized P&L, contract multipliers, and watchlist/chart utilities. Playwright workflows live in `tests/e2e` and exercise the overview, watchlist, chart, and saved chart controls.
 
 ## Configuration
 
@@ -74,6 +74,10 @@ The Next app parses its provider configuration with Zod in `lib/market-data/env.
 - `lib/providers/ibkr-provider.ts` is the Next.js adapter. It calls only the private bridge and validates bridge responses with Zod.
 - `services/ibkr-bridge` is a separate Node process using `@stoqey/ib`; it owns the persistent TWS socket, conId contract resolver, market-data accumulator, line/ref-count manager, historical request queue, and server-side SSE.
 - `app/api/quotes`, `app/api/search`, and `app/api/stream` proxy through Next.js. The browser never receives the bridge URL/token or speaks directly to IB Gateway.
+- `/watchlists` and `/chart/[symbol]` provide a live watchlist and chart workspace. `/api/watchlists`, `/api/bars`, and `/api/preferences` validate requests and persist data when Postgres is configured.
+- `lib/market-data/quote-store.ts` stores normalized quote snapshots by symbol; symbol-specific subscriptions mean a tick notifies only consumers of that symbol.
+- `lib/market-data/stream-manager.ts` shares the browser's SSE stream, ref-counts symbols, buffers quote ticks and flushes them every 150 ms, then reconnects with exponential backoff and jitter. The store tracks last update and marks quotes stale after a quiet period. The watchlist requests quotes and subscribes to the stream once for the union of its symbols.
+- Chart panels lazily load `lightweight-charts` on the client, fetch history through `/api/bars`, and apply streamed ticks to timeframe bars. Chart controls and watchlist columns are saved locally and sent to the preferences API.
 - Contract metadata and historical responses are cached in Postgres (`ib_contracts`, `ib_historical_cache`). Without Postgres the bridge does not start; mock mode does not use the bridge.
 - `services/ibkr-bridge/src/bar-aggregator.ts` is shared by live IBKR ticks and the mock provider so chart OHLCV aggregation follows the same path.
 - Zod schemas in `lib/market-data/schemas.ts` validate data at the provider/API boundary.
@@ -86,6 +90,16 @@ The Next app parses its provider configuration with Zod in `lib/market-data/env.
 3. Select the adapter in `lib/market-data/index.ts`; keep browser calls routed through `/api/*`.
 4. Fan streaming through server-side SSE and preserve unsubscribe/reconnect behavior. Never put provider keys in client code.
 5. Label data as real-time or delayed according to the provider's actual entitlement.
+
+### Watchlists and charts
+
+The watchlist API supports multiple named lists, duplicate/rename/delete, item add/edit/move/remove, and validated reorder. It uses the Drizzle schema and `db/migrations/0001_watchlists.sql` when `DATABASE_URL` is configured, and a process-local in-memory store in mock mode without Postgres. The seed creates Core and Macro sample lists. Chart pane/layout preferences and watchlist columns use `/api/preferences`; a local browser copy keeps the demo usable without a database.
+
+The stream manager owns a single browser SSE connection for each active symbol set and coalesces incoming quote fields into the symbol-keyed quote store at a maximum update rate of about 6.7 Hz. Components subscribe to individual quote symbols rather than the entire table. Connection state, last update, delayed/frozen source, and stale data are visible in the UI. The stale threshold defaults to 15 seconds and can be set when constructing `MarketStreamManager`. Quote updates are symbol-scoped in the store test; a React Profiler session has not been run.
+
+To add an indicator, implement its pure calculation in `lib/indicators`, add its validated kind/configuration to `lib/watchlists/preferences.ts`, then connect it to the chart's indicator selector and rendering path in `components/price-chart-panel.tsx`. Keep calculations independent of React and add known-value unit tests.
+
+Known watchlist/chart limitations: this is still single-user-first (`local-user` is a placeholder; Auth.js is not wired), so database records are not isolated by authenticated identity. The no-Postgres fallback is process-local and not durable across server restarts. Chart range/history availability depends on the selected provider and is subject to IBKR pacing; lazy history and live bars have not been validated against all exchange sessions, especially overnight futures. Chart crosshair/time synchronization is approximate across dissimilar trading calendars. The desktop split is simplified on small screens, and symbol search currently uses the provider's available directory rather than exchange-wide discovery in mock mode.
 
 ## Interactive Brokers setup
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { asc, eq, inArray, max } from "drizzle-orm";
+import { and, asc, eq, inArray, max } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { seedWatchlists } from "@/db/seed";
 import { watchlistItems, watchlists } from "@/db/schema";
@@ -121,7 +121,10 @@ export async function duplicateWatchlist(sourceId: string, name?: string): Promi
 export async function renameWatchlist(id: string, name: string): Promise<Watchlist> {
   const database = getDatabase();
   if (database) {
-    const rows = await database.db.update(watchlists).set({ name }).where(eq(watchlists.id, id)).returning();
+    const rows = await database.db.update(watchlists).set({ name }).where(and(
+      eq(watchlists.id, id),
+      eq(watchlists.userId, USER_ID),
+    )).returning();
     if (!rows.length) throw missingList();
   } else {
     requireList(memoryLists(), id).name = name;
@@ -132,7 +135,10 @@ export async function renameWatchlist(id: string, name: string): Promise<Watchli
 export async function deleteWatchlist(id: string): Promise<void> {
   const database = getDatabase();
   if (database) {
-    const rows = await database.db.delete(watchlists).where(eq(watchlists.id, id)).returning({ id: watchlists.id });
+    const rows = await database.db.delete(watchlists).where(and(
+      eq(watchlists.id, id),
+      eq(watchlists.userId, USER_ID),
+    )).returning({ id: watchlists.id });
     if (!rows.length) throw missingList();
     return;
   }
@@ -169,9 +175,12 @@ export async function addWatchlistItem(
 export async function removeWatchlistItem(listId: string, itemId: string): Promise<void> {
   const database = getDatabase();
   if (database) {
-    const rows = await database.db.delete(watchlistItems).where(eq(watchlistItems.id, itemId))
+    const rows = await database.db.delete(watchlistItems).where(and(
+      eq(watchlistItems.id, itemId),
+      eq(watchlistItems.watchlistId, listId),
+    ))
       .returning({ id: watchlistItems.id, watchlistId: watchlistItems.watchlistId });
-    if (!rows.length || rows[0]!.watchlistId !== listId) throw missingItem();
+    if (!rows.length) throw missingItem();
     return;
   }
   const list = requireList(memoryLists(), listId);
@@ -202,18 +211,26 @@ export async function updateWatchlistItem(
       ...(targetId !== listId ? { watchlistId: targetId, position: target.items.length } : {}),
     };
     const rows = await database.db.update(watchlistItems).set(updated)
-      .where(eq(watchlistItems.id, itemId)).returning();
+      .where(and(
+        eq(watchlistItems.id, itemId),
+        eq(watchlistItems.watchlistId, listId),
+      )).returning();
     if (!rows.length) throw missingItem();
     return { ...rows[0]!, assetClass: rows[0]!.assetClass as WatchlistItem["assetClass"] };
   }
   const inMemorySource = memoryLists().find((entry) => entry.id === listId)!;
   const sourceIndex = inMemorySource.items.findIndex((entry) => entry.id === itemId);
-  const [moved] = inMemorySource.items.splice(sourceIndex, 1);
-  if (patch.note !== undefined) moved!.note = patch.note;
-  if (targetId !== listId) {
-    moved!.watchlistId = targetId;
-    moved!.position = memoryLists().find((entry) => entry.id === targetId)!.items.length;
+  if (sourceIndex < 0) throw missingItem();
+  if (targetId === listId) {
+    const existing = inMemorySource.items[sourceIndex]!;
+    if (patch.note !== undefined) existing.note = patch.note;
+    return { ...existing };
   }
+  const [moved] = inMemorySource.items.splice(sourceIndex, 1);
+  inMemorySource.items.forEach((entry, position) => { entry.position = position; });
+  if (patch.note !== undefined) moved!.note = patch.note;
+  moved!.watchlistId = targetId;
+  moved!.position = memoryLists().find((entry) => entry.id === targetId)!.items.length;
   memoryLists().find((entry) => entry.id === targetId)!.items.push(moved!);
   return { ...moved! };
 }

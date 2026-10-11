@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getMarketDataProvider } from "@/lib/market-data";
+import { instrumentSearchResultSchema } from "@/lib/market-data/schemas";
 
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
@@ -14,7 +15,8 @@ export async function GET(request: Request) {
     );
   }
   try {
-    return NextResponse.json(await provider.searchSymbols(query), {
+    const results = instrumentSearchResultSchema.array().parse(await provider.searchSymbols(query));
+    return NextResponse.json(results, {
       headers: { "Cache-Control": "private, max-age=15" },
     });
   } catch (error) {

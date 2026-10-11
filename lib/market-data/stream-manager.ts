@@ -27,6 +27,8 @@ const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
 };
 
 export class MarketStreamManager {
+  constructor(private readonly staleAfterMs = 15_000) {}
+
   private readonly consumers = new Map<string, Set<symbol>>();
   private readonly pending = new Map<string, Quote>();
   private readonly barListeners = new Map<string, Set<{ timeframe: Timeframe; listener: BarListener }>>();
@@ -97,11 +99,29 @@ export class MarketStreamManager {
     return () => this.statuses.delete(listener);
   }
 
+  seedBar(symbol: string, timeframe: Timeframe, bar: Bar): void {
+    const key = `${symbol}:${timeframe}`;
+    const current = this.currentBars.get(key);
+    if (!current || current.time < bar.time) {
+      this.currentBars.set(key, bar);
+      return;
+    }
+    if (current.time === bar.time) {
+      this.currentBars.set(key, {
+        ...bar,
+        high: Math.max(bar.high, current.high),
+        low: Math.min(bar.low, current.low),
+        close: current.close,
+        volume: Math.max(bar.volume, current.volume),
+      });
+    }
+  }
+
   private readonly tickSubscriptions = new Map<symbol, Map<string, TickListener>>();
 
   private ensureTimers(): void {
     this.flushTimer ??= setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
-    this.staleTimer ??= setInterval(() => quoteStore.markStale(), 2_000);
+    this.staleTimer ??= setInterval(() => quoteStore.markStale(Date.now(), this.staleAfterMs), 2_000);
   }
 
   private scheduleReconcile(): void {

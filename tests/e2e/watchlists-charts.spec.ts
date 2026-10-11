@@ -39,8 +39,9 @@ test("search, reorder, chart controls, and saved layout survive reload", async (
   await expect.poll(() => page.evaluate(() => localStorage.getItem("vantage.chart.preferences"))).toContain("SMA");
   await page.waitForTimeout(700);
   await page.reload();
-  console.log("Chart prefs after reload:", await page.evaluate(() => localStorage.getItem("vantage.chart.preferences")), page.url());
+  await page.waitForTimeout(1000);
   await expect(page.getByTestId("layout-4")).toHaveClass(/bg-emerald-400/);
   await expect(page.getByTestId("price-chart-3")).toBeVisible();
-  await expect(page.getByText(/SMA 20/).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add indicator" }).first()).toBeVisible();
+  await expect(page.getByRole("spinbutton", { name: "SMA period" }).first()).toHaveValue("20");
 });

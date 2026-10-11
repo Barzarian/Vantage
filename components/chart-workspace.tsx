@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Time } from "lightweight-charts";
 import { Activity, Columns2, LayoutGrid, Plus, Settings2 } from "lucide-react";
 import {
   chartPreferencesSchema,
@@ -53,6 +54,7 @@ export function ChartWorkspace({ symbol }: Props) {
   });
   const [loaded, setLoaded] = useState(false);
   const [syncTime, setSyncTime] = useState<number | null>(null);
+  const [syncRange, setSyncRange] = useState<{ from: Time; to: Time } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
@@ -141,7 +143,16 @@ export function ChartWorkspace({ symbol }: Props) {
     });
   };
 
+  const removePane = (index: number) => {
+    setPreferences((current) => {
+      const panes = current.panes.filter((_, paneIndex) => paneIndex !== index);
+      const layout = panes.length >= 4 ? "4" : panes.length >= 2 ? "2" : "1";
+      return chartPreferencesSchema.parse({ ...current, layout, panes });
+    });
+  };
+
   const crosshairUpdate = (time: number | null) => setSyncTime(time);
+  const rangeUpdate = (range: { from: Time; to: Time } | null) => setSyncRange(range);
   const gridClass = useMemo(() => {
     if (preferences.layout === "1") return "grid-cols-1";
     return "grid-cols-1 lg:grid-cols-2";
@@ -178,11 +189,13 @@ export function ChartWorkspace({ symbol }: Props) {
           onChange={(next) => changePane(index, next)}
           paneIndex={index}
           paneCount={preferences.panes.length}
-          onRemove={preferences.panes.length > 1 ? () => changeLayout(preferences.panes.length === 4 ? "2" : "1") : undefined}
+          onRemove={preferences.panes.length > 1 ? () => removePane(index) : undefined}
           syncCrosshair={preferences.syncCrosshair}
           syncTimeRange={preferences.syncTimeRange}
           onCrosshair={crosshairUpdate}
           synchronizedTime={syncTime}
+          onVisibleRange={rangeUpdate}
+          synchronizedRange={syncRange}
         />)}
       </div>}
       <footer className="border-t border-[var(--border)] px-4 py-3 text-[10px] text-slate-600">Market data is provided for informational purposes only. Not financial advice.</footer>

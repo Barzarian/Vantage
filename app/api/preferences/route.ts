@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { userPreferencesSchema } from "@/lib/watchlists/preferences";
 import { getUserPreferences, saveUserPreferences } from "@/lib/watchlists/user-preferences";
-import { watchlistErrorResponse } from "@/lib/watchlists/http";
+import { readJsonBody, watchlistErrorResponse } from "@/lib/watchlists/http";
 
 export const runtime = "nodejs";
 
@@ -17,7 +17,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    const input = userPreferencesSchema.parse(await request.json());
+    const input = userPreferencesSchema.parse(await readJsonBody(request));
     return NextResponse.json({ preferences: await saveUserPreferences(input) });
   } catch (error) {
     return watchlistErrorResponse(error);

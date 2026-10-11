@@ -30,9 +30,11 @@ export async function GET(request: Request) {
         unsubscribe = getMarketDataProvider().subscribe(symbols, (tick) => {
           const parsed = quoteSchema.safeParse(tick);
           if (parsed.success) send("tick", parsed.data);
+          else send("error", { code: "INVALID_TICK", message: "The market-data provider returned an invalid quote." });
         }, (symbol, bar) => {
           const parsed = barSchema.safeParse(bar);
           if (parsed.success) send("bar", { symbol, bar: parsed.data });
+          else send("error", { code: "INVALID_BAR", message: "The market-data provider returned an invalid bar." });
         }, undefined, (status, event) => {
           send(event, status);
         });

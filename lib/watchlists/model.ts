@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 export const assetClassSchema = z.enum(["stock", "future", "option", "index"]);
+export const watchlistIdSchema = z.string().uuid();
+export const watchlistItemIdParamsSchema = z.object({
+  watchlistId: watchlistIdSchema,
+  itemId: watchlistIdSchema,
+});
 
 export const watchlistItemSchema = z.object({
   id: z.string().uuid(),

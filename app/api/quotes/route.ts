@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getMarketDataProvider } from "@/lib/market-data";
+import { quoteSchema } from "@/lib/market-data/schemas";
 
 const symbolsSchema = z.array(z.string().trim().min(1).max(32)).min(1).max(100);
 
@@ -12,7 +13,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const quotes = await getMarketDataProvider().getQuote(parsed.data);
+    const quotes = quoteSchema.array().parse(await getMarketDataProvider().getQuote(parsed.data));
     return NextResponse.json(quotes, {
       headers: { "Cache-Control": "private, max-age=1, stale-while-revalidate=4" },
     });
