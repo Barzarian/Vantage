@@ -26,6 +26,8 @@ pnpm test
 pnpm test:e2e
 ```
 
+The unit suite covers Black-Scholes Greeks, SMA/EMA/RSI/MACD/Bollinger Bands/VWAP, realized and unrealized P&L, and stock/options/futures contract multipliers. Playwright smoke tests live in `tests/e2e`; currently there is one main application page (`/`), so the smoke suite covers the market overview, watchlist, and informational disclaimer.
+
 ## Configuration
 
 | Variable | Description |
@@ -58,6 +60,6 @@ The server parses provider configuration with Zod in `lib/market-data/env.ts`. P
 
 ## Current stage and known limitations
 
-The scaffold and mock-provider stage is implemented. The overview shows simulated quotes and streams them through the server. The watchlist, charting, options, futures, positions, alerts, persistence, authentication, and real-provider adapter are staged for subsequent implementation.
+The scaffold and mock-provider stage is implemented. The overview shows simulated quotes and streams them through the server. Core unit-tested calculations are provided for Black-Scholes Greeks, technical indicators, and position P&L; they are not yet wired into full options, charting, or portfolio pages. The watchlist, charting, options, futures, positions, alerts, persistence, authentication, and real-provider adapter are staged for subsequent implementation.
 
 The mock feed is generated locally and is not exchange data; its market-status display and example instrument metadata are illustrative only. No data is persisted, there is no authentication or alert delivery, and the current interface is desktop-first. Do not use mock values or this prototype to make trading decisions.
