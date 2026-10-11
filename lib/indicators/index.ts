@@ -161,3 +161,27 @@ export function volumeWeightedAveragePrice(bars: PriceBar[]): Array<number | nul
     return cumulativeVolume === 0 ? null : cumulativePriceVolume / cumulativeVolume;
   });
 }
+
+export function sessionVolumeWeightedAveragePrice(
+  bars: PriceBar[],
+  sessionKey: (index: number) => string = (index) => new Date(index * 86_400_000).toISOString().slice(0, 10),
+): Array<number | null> {
+  let currentSession = "";
+  let cumulativeVolume = 0;
+  let cumulativePriceVolume = 0;
+  return bars.map((bar, index) => {
+    if (![bar.high, bar.low, bar.close, bar.volume].every(Number.isFinite) || bar.volume < 0) {
+      throw new RangeError("Bars must contain finite prices and non-negative volume.");
+    }
+    const key = sessionKey(index);
+    if (key !== currentSession) {
+      currentSession = key;
+      cumulativeVolume = 0;
+      cumulativePriceVolume = 0;
+    }
+    const typicalPrice = (bar.high + bar.low + bar.close) / 3;
+    cumulativePriceVolume += typicalPrice * bar.volume;
+    cumulativeVolume += bar.volume;
+    return cumulativeVolume === 0 ? null : cumulativePriceVolume / cumulativeVolume;
+  });
+}

@@ -12,6 +12,18 @@
   --red: #f16c72;
 }
 
+:root.light {
+  color-scheme: light;
+  --background: #f3f5f7;
+  --panel: #ffffff;
+  --panel-raised: #edf1f4;
+  --border: #d6dde4;
+  --muted: #647181;
+  --foreground: #1b2632;
+  --green: #087b4b;
+  --red: #be3344;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -38,4 +50,29 @@ input {
 ::selection {
   background: #284838;
   color: white;
+}
+
+@keyframes tick-up {
+  from { background-color: rgb(52 211 153 / 15%); }
+  to { background-color: transparent; }
+}
+
+@keyframes tick-down {
+  from { background-color: rgb(251 113 133 / 15%); }
+  to { background-color: transparent; }
+}
+
+.flash-up {
+  animation: tick-up 400ms ease-out;
+}
+
+.flash-down {
+  animation: tick-down 400ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flash-up,
+  .flash-down {
+    animation: none;
+  }
 }

@@ -58,13 +58,14 @@ function typeFor(symbol: string): Quote["type"] {
   return SEEDS[symbol]?.type ?? (symbol.includes(" ") ? "option" : "stock");
 }
 
-function makeQuote(symbol: string, previous?: number): Quote {
+function makeQuote(symbol: string, previous?: number, previousVolume?: number): Quote {
   const baseline = priceFor(symbol);
   const prior = previous ?? baseline * (1 + (Math.random() - 0.5) * 0.025);
   const last = Math.max(0.01, prior * (1 + (Math.random() - 0.5) * 0.0008));
   const spread = Math.max(last * 0.00015, 0.01);
   const dayLow = Math.min(last, baseline * 0.992);
   const dayHigh = Math.max(last, baseline * 1.008);
+  const lastSize = Math.floor(1 + Math.random() * 200);
 
   return quoteSchema.parse({
     symbol,
@@ -75,7 +76,10 @@ function makeQuote(symbol: string, previous?: number): Quote {
     changePercent: ((last - baseline) / baseline) * 100,
     bid: last - spread / 2,
     ask: last + spread / 2,
-    volume: Math.floor(200_000 + Math.random() * 8_000_000),
+    volume: previousVolume === undefined
+      ? Math.floor(200_000 + Math.random() * 8_000_000)
+      : previousVolume + lastSize,
+    lastSize,
     dayLow,
     dayHigh,
     weekLow: baseline * 0.88,
@@ -86,11 +90,13 @@ function makeQuote(symbol: string, previous?: number): Quote {
 
 export class MockMarketDataProvider implements MarketDataProvider {
   private readonly prices = new Map<string, number>();
+  private readonly volumes = new Map<string, number>();
 
   async getQuote(symbols: string[]): Promise<Quote[]> {
     return symbols.map((symbol) => {
-      const quote = makeQuote(symbol, this.prices.get(symbol));
+      const quote = makeQuote(symbol, this.prices.get(symbol), this.volumes.get(symbol));
       this.prices.set(symbol, quote.last);
+      this.volumes.set(symbol, quote.volume);
       return quote;
     });
   }
@@ -190,8 +196,9 @@ export class MockMarketDataProvider implements MarketDataProvider {
     const aggregator = new BarAggregator();
     const timer = setInterval(() => {
       for (const symbol of uniqueSymbols) {
-        const quote = makeQuote(symbol, this.prices.get(symbol));
+        const quote = makeQuote(symbol, this.prices.get(symbol), this.volumes.get(symbol));
         this.prices.set(symbol, quote.last);
+        this.volumes.set(symbol, quote.volume);
         const tick: Tick = quote;
         onTick(tick);
         if (onBar) {

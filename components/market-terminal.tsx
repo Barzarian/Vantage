@@ -17,6 +17,7 @@ import {
 import type { InstrumentSearchResult, Quote } from "@/lib/market-data/schemas";
 import { instrumentSearchResultSchema, quoteSchema } from "@/lib/market-data/schemas";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "./theme-toggle";
 
 type MarketTerminalProps = {
   initialQuotes: Quote[];
@@ -183,7 +184,11 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
             VANTAGE <span className="text-[10px] font-normal tracking-[0.18em] text-slate-500">TERMINAL</span>
           </Link>
           <nav className="hidden h-14 items-center gap-1 md:flex">
-            {sections.map((section) => (
+            {sections.map((section) => section === "Watchlists" ? (
+              <Link key={section} href="/watchlists" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
+            ) : section === "Charts" ? (
+              <Link key={section} href={`/chart/${encodeURIComponent(watchSymbols[0] ?? "AAPL")}`} className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
+            ) : (
               <button key={section} onClick={() => setActiveSection(section)} className={cn("h-full border-b-2 px-3 text-xs transition-colors", activeSection === section ? "border-emerald-400 text-white" : "border-transparent text-slate-500 hover:text-slate-200")}>
                 {section}
               </button>
@@ -196,6 +201,7 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
           </button>
           <button aria-label="Alerts" className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-[var(--panel-raised)]"><Bell size={16} /></button>
           <button aria-label="Settings" className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-[var(--panel-raised)]"><Settings2 size={16} /></button>
+          <ThemeToggle />
           <div className="ml-1 hidden items-center gap-2 border-l border-[var(--border)] pl-3 sm:flex">
             <span className="grid size-7 place-items-center rounded-full bg-slate-700 text-[10px] font-medium text-slate-200">JD</span>
             <ChevronDown size={13} className="text-slate-500" />
