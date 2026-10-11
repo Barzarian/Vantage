@@ -1,5 +1,7 @@
 packages:
   - .
+  - services/ibkr-bridge
 
 allowBuilds:
   unrs-resolver: true
+  esbuild: true

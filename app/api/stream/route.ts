@@ -1,5 +1,5 @@
 import { getMarketDataProvider } from "@/lib/market-data";
-import { quoteSchema } from "@/lib/market-data/schemas";
+import { barSchema, quoteSchema } from "@/lib/market-data/schemas";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +19,26 @@ export async function GET(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch (error) {
+          if (error instanceof TypeError) return;
+          throw error;
+        }
       };
-      unsubscribe = getMarketDataProvider().subscribe(symbols, (tick) => {
-        const parsed = quoteSchema.safeParse(tick);
-        if (parsed.success) send("tick", parsed.data);
-      });
+      try {
+        unsubscribe = getMarketDataProvider().subscribe(symbols, (tick) => {
+          const parsed = quoteSchema.safeParse(tick);
+          if (parsed.success) send("tick", parsed.data);
+        }, (symbol, bar) => {
+          const parsed = barSchema.safeParse(bar);
+          if (parsed.success) send("bar", { symbol, bar: parsed.data });
+        }, undefined, (status, event) => {
+          send(event, status);
+        });
+      } catch (error) {
+        send("error", { message: error instanceof Error ? error.message : "Market stream failed." });
+      }
       heartbeat = setInterval(() => send("heartbeat", Date.now()), 15000);
       request.signal.addEventListener("abort", () => {
         unsubscribe();

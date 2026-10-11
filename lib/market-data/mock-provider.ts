@@ -5,11 +5,14 @@ import {
   quoteSchema,
   type Bar,
   type FuturesContract,
+  type InstrumentSearchResult,
   type OptionContract,
   type Quote,
   type Tick,
 } from "./schemas";
 import type { BarRange, MarketDataProvider, TickListener, Timeframe } from "./provider";
+import type { BarListener } from "./provider";
+import { BarAggregator } from "@/services/ibkr-bridge/src/bar-aggregator";
 
 const SEEDS: Record<string, { name: string; type: Quote["type"]; price: number }> = {
   SPX: { name: "S&P 500", type: "index", price: 5824.5 },
@@ -39,6 +42,7 @@ const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   "5m": 300,
   "15m": 900,
   "1h": 3600,
+  "4h": 14400,
   "1d": 86400,
   "1w": 604800,
   "1M": 2592000,
@@ -91,31 +95,47 @@ export class MockMarketDataProvider implements MarketDataProvider {
     });
   }
 
+  async searchSymbols(query: string): Promise<InstrumentSearchResult[]> {
+    const normalized = query.trim().toUpperCase();
+    return Object.entries(SEEDS)
+      .filter(([symbol, seed]) => symbol.startsWith(normalized) || seed.name.toUpperCase().includes(normalized))
+      .slice(0, 20)
+      .map(([symbol, seed]) => ({
+        conId: [...symbol].reduce((total, character) => total * 31 + character.charCodeAt(0), 0) >>> 0 || 1,
+        symbol,
+        name: seed.name,
+        secType: seed.type === "future" ? "FUT" : seed.type === "index" ? "IND" : "STK",
+        exchange: seed.type === "future" ? "CME" : seed.type === "index" ? "CBOE" : "SMART",
+        primaryExchange: seed.type === "stock" ? "NASDAQ" : undefined,
+        currency: "USD",
+      }));
+  }
+
   async getBars(symbol: string, timeframe: Timeframe, range: BarRange): Promise<Bar[]> {
     const interval = TIMEFRAME_SECONDS[timeframe];
     const count = Math.min(range.limit ?? 120, 500);
     const end = Math.floor(range.to / interval) * interval;
     let price = priceFor(symbol) * 0.97;
-    const bars: Bar[] = [];
+    const aggregator = new BarAggregator();
 
     for (let index = count - 1; index >= 0; index -= 1) {
       const time = end - index * interval;
-      const open = price;
-      const close = Math.max(0.01, open * (1 + (Math.random() - 0.49) * 0.006));
-      bars.push(
-        barSchema.parse({
-          time,
-          open,
-          close,
-          high: Math.max(open, close) * (1 + Math.random() * 0.002),
-          low: Math.min(open, close) * (1 - Math.random() * 0.002),
-          volume: Math.floor(1_000 + Math.random() * 25_000),
-        }),
-      );
-      price = close;
+      for (let sample = 0; sample < 4; sample += 1) {
+        price = Math.max(0.01, price * (1 + (Math.random() - 0.49) * 0.002));
+        aggregator.update(
+          symbol,
+          timeframe,
+          time + Math.floor((interval * sample) / 4),
+          price,
+          Math.floor(250 + Math.random() * 6_000),
+        );
+      }
     }
 
-    return bars.filter((bar) => bar.time >= range.from && bar.time <= range.to);
+    return aggregator
+      .getBars(symbol, timeframe)
+      .map((bar) => barSchema.parse(bar))
+      .filter((bar) => bar.time >= range.from && bar.time <= range.to);
   }
 
   async getOptionChain(underlying: string, expiry?: string): Promise<OptionContract[]> {
@@ -160,14 +180,24 @@ export class MockMarketDataProvider implements MarketDataProvider {
     });
   }
 
-  subscribe(symbols: string[], onTick: TickListener): () => void {
+  subscribe(
+    symbols: string[],
+    onTick: TickListener,
+    onBar?: BarListener,
+    timeframe: Timeframe = "1m",
+  ): () => void {
     const uniqueSymbols = [...new Set(symbols)];
+    const aggregator = new BarAggregator();
     const timer = setInterval(() => {
       for (const symbol of uniqueSymbols) {
         const quote = makeQuote(symbol, this.prices.get(symbol));
         this.prices.set(symbol, quote.last);
         const tick: Tick = quote;
         onTick(tick);
+        if (onBar) {
+          const bar = aggregator.update(symbol, timeframe, Math.floor(Date.now() / 1000), quote.last);
+          onBar(symbol, bar);
+        }
       }
     }, 900);
     return () => clearInterval(timer);

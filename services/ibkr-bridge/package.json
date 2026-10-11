@@ -1,0 +1,21 @@
+{
+  "name": "@vantage/ibkr-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=../../.env.local --import tsx src/index.ts",
+    "start": "node --env-file-if-exists=../../.env.local --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stoqey/ib": "1.6.12",
+    "postgres": "3.4.9",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "tsx": "latest",
+    "typescript": "6.0.3"
+  }
+}

@@ -17,6 +17,12 @@ export const quoteSchema = z.object({
   dayHigh: z.number().finite(),
   weekLow: z.number().finite(),
   weekHigh: z.number().finite(),
+  bidSize: z.number().nonnegative().optional(),
+  askSize: z.number().nonnegative().optional(),
+  lastSize: z.number().nonnegative().optional(),
+  open: z.number().finite().optional(),
+  prevClose: z.number().finite().optional(),
+  dataType: z.enum(["realtime", "delayed", "frozen"]).optional(),
   updatedAt: z.string().datetime(),
 });
 export type Quote = z.infer<typeof quoteSchema>;
@@ -56,6 +62,20 @@ export const futuresContractSchema = z.object({
   daysToExpiry: z.number().int().nonnegative(),
 });
 export type FuturesContract = z.infer<typeof futuresContractSchema>;
+
+export const instrumentSearchResultSchema = z.object({
+  conId: z.number().int().positive(),
+  symbol: z.string().min(1),
+  localSymbol: z.string().optional(),
+  name: z.string(),
+  secType: z.enum(["STK", "IND", "FUT"]),
+  exchange: z.string(),
+  primaryExchange: z.string().optional(),
+  currency: z.string(),
+  multiplier: z.string().optional(),
+  lastTradeDate: z.string().optional(),
+});
+export type InstrumentSearchResult = z.infer<typeof instrumentSearchResultSchema>;
 
 export const tickSchema = quoteSchema;
 export type Tick = Quote;

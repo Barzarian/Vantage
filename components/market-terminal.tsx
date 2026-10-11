@@ -14,7 +14,8 @@ import {
   SlidersHorizontal,
   Wifi,
 } from "lucide-react";
-import type { Quote } from "@/lib/market-data/schemas";
+import type { InstrumentSearchResult, Quote } from "@/lib/market-data/schemas";
+import { instrumentSearchResultSchema, quoteSchema } from "@/lib/market-data/schemas";
 import { cn } from "@/lib/utils";
 
 type MarketTerminalProps = {
@@ -37,17 +38,50 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
   const [quotes, setQuotes] = useState(() => new Map(initialQuotes.map((quote) => [quote.symbol, quote])));
   const [strip, setStrip] = useState(() => new Map(initialStrip.map((quote) => [quote.symbol, quote])));
   const [connected, setConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState<"disconnected" | "connecting" | "reconnecting" | "live">("connecting");
+  const [streamMessage, setStreamMessage] = useState("");
   const [activeSection, setActiveSection] = useState("Overview");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<InstrumentSearchResult[]>([]);
+  const [searchError, setSearchError] = useState("");
+  const [watchSymbols, setWatchSymbols] = useState(() => initialQuotes.map((quote) => quote.symbol));
   const [now, setNow] = useState<Date | null>(null);
 
   useEffect(() => {
-    const symbols = [...initialQuotes, ...initialStrip].map((quote) => quote.symbol);
+    const symbols = [...new Set([...watchSymbols, ...initialStrip.map((quote) => quote.symbol)])];
     const query = new URLSearchParams();
-    [...new Set(symbols)].forEach((symbol) => query.append("symbol", symbol));
+    symbols.forEach((symbol) => query.append("symbol", symbol));
     const events = new EventSource(`/api/stream?${query.toString()}`);
-    events.onopen = () => setConnected(true);
-    events.onerror = () => setConnected(false);
+    const isIbkr = initialQuotes.some((quote) => quote.dataType !== undefined);
+    events.onopen = () => {
+      setConnected(true);
+      if (!isIbkr) setConnectionState("live");
+    };
+    events.onerror = () => {
+      setConnected(false);
+      setConnectionState("disconnected");
+    };
+    events.addEventListener("status", (event) => {
+      const data = (event as MessageEvent<string>).data;
+      try {
+        const status = JSON.parse(data) as { state?: typeof connectionState; lastError?: string; message?: string };
+        if (status.state) setConnectionState(status.state);
+        setStreamMessage(status.message ?? status.lastError ?? "");
+      } catch {
+        setStreamMessage("Received an invalid market connection status.");
+      }
+    });
+    events.addEventListener("error", (event) => {
+      const data = (event as MessageEvent<string>).data;
+      if (!data) return;
+      try {
+        const error = JSON.parse(data) as { action?: string; message?: string };
+        setStreamMessage(error.action ?? error.message ?? "IBKR market-data error.");
+      } catch {
+        setStreamMessage("IBKR market-data error.");
+      }
+    });
     events.addEventListener("tick", (event) => {
       const quote = JSON.parse((event as MessageEvent<string>).data) as Quote;
       setQuotes((current) => current.has(quote.symbol) ? new Map(current).set(quote.symbol, quote) : current);
@@ -59,7 +93,37 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
       events.close();
       clearInterval(clock);
     };
-  }, [initialQuotes, initialStrip]);
+  }, [watchSymbols, initialQuotes, initialStrip]);
+
+  useEffect(() => {
+    if (!searchOpen || !searchQuery.trim()) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}`, {
+          signal: controller.signal,
+        });
+        const result: unknown = await response.json();
+        if (!response.ok) {
+          const message =
+            typeof result === "object" && result !== null && "error" in result && typeof result.error === "string"
+              ? result.error
+              : "Search failed.";
+          throw new Error(message);
+        }
+        setSearchResults(instrumentSearchResultSchema.array().parse(result));
+        setSearchError("");
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setSearchResults([]);
+        setSearchError(error instanceof Error ? error.message : "Search failed.");
+      }
+    }, 180);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchOpen, searchQuery]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -76,7 +140,39 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const rows = useMemo(() => initialQuotes.map(({ symbol }) => quotes.get(symbol) ?? initialQuotes.find((q) => q.symbol === symbol)!), [initialQuotes, quotes]);
+  const rows = useMemo(
+    () => watchSymbols.flatMap((symbol) => {
+      const quote = quotes.get(symbol) ?? initialQuotes.find((item) => item.symbol === symbol);
+      return quote ? [quote] : [];
+    }),
+    [initialQuotes, quotes, watchSymbols],
+  );
+  const dataType = [...quotes.values()].find((quote) => quote.dataType)?.dataType;
+
+  const addInstrument = async (instrument: InstrumentSearchResult) => {
+    const symbol = initialQuotes.some((quote) => quote.dataType)
+      ? `conId:${instrument.conId}`
+      : instrument.symbol;
+    const params = new URLSearchParams({ symbol });
+    try {
+      const response = await fetch(`/api/quotes?${params.toString()}`);
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        const message =
+          typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+            ? body.error
+            : "Could not add this instrument to the watchlist.";
+        throw new Error(message);
+      }
+      const quote = quoteSchema.parse(Array.isArray(body) ? body[0] : undefined);
+      setQuotes((current) => new Map(current).set(quote.symbol, quote));
+      setWatchSymbols((current) => current.includes(quote.symbol) ? current : [...current, quote.symbol]);
+      setSearchOpen(false);
+      setSearchQuery("");
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Could not add this instrument.");
+    }
+  };
 
   return (
     <main className="min-h-screen bg-[var(--background)]">
@@ -121,23 +217,28 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
           <span className="size-1.5 rounded-full bg-emerald-400" />
           U.S. MARKET OPEN
           <span className="mx-1 text-slate-700">|</span>
-          {connected ? <Wifi size={12} className="text-emerald-400" /> : <span className="size-1.5 rounded-full bg-amber-400" />}
-          {connected ? "STREAMING" : "CONNECTING"}
+          {connectionState === "live" && connected ? <Wifi size={12} className="text-emerald-400" /> : <span className={cn("size-1.5 rounded-full", connectionState === "disconnected" ? "bg-rose-400" : "bg-amber-400")} />}
+          {connectionState === "live" && connected ? "LIVE" : connectionState === "reconnecting" ? "RECONNECTING" : connectionState === "disconnected" ? "DISCONNECTED" : "CONNECTING"}
           <span className="text-slate-700">·</span>
-          MOCK DATA
-          <span>{now ? now.toLocaleTimeString("en-US", { hour12: false }) : "--:--:--"} ET</span>
+          {dataType === "delayed" ? "DELAYED" : dataType === "frozen" ? "FROZEN" : dataType === "realtime" ? "REAL-TIME" : "MOCK DATA"}
+          <span>{now ? now.toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) : "--:--:--"} ET</span>
         </div>
       </section>
+      {streamMessage && (
+        <div role="status" className="border-b border-amber-500/20 bg-amber-500/5 px-5 py-2 text-xs text-amber-200">
+          {streamMessage}
+        </div>
+      )}
 
       <div className="mx-auto max-w-[1600px] px-5 py-6">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500"><LayoutGrid size={13} /> Market overview</div>
             <h1 className="text-xl font-medium tracking-tight text-slate-100">Good morning</h1>
-            <p className="mt-1 text-xs text-slate-500">Your markets at a glance. Data is simulated for demonstration.</p>
+            <p className="mt-1 text-xs text-slate-500">{dataType ? "Your markets at a glance. Data access is subject to your IBKR subscriptions." : "Your markets at a glance. Data is simulated for demonstration."}</p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-300"><span className="size-1.5 rounded-full bg-amber-400" /> Simulated data</span>
+            <span className={cn("flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px]", dataType ? "border-sky-500/20 bg-sky-500/5 text-sky-300" : "border-amber-500/20 bg-amber-500/5 text-amber-300")}><span className={cn("size-1.5 rounded-full", dataType ? "bg-sky-400" : "bg-amber-400")} /> {dataType === "delayed" ? "Delayed data" : dataType === "frozen" ? "Frozen data" : dataType === "realtime" ? "Real-time data" : "Simulated data"}</span>
             <button className="flex h-8 items-center gap-2 rounded-md border border-[var(--border)] px-2.5 text-xs text-slate-300 hover:bg-[var(--panel-raised)]"><SlidersHorizontal size={13} /> Customize</button>
           </div>
         </div>
@@ -224,13 +325,21 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
           <div role="dialog" aria-modal="true" aria-label="Symbol search" className="w-full max-w-lg overflow-hidden rounded-lg border border-slate-700 bg-[#11151b] shadow-2xl">
             <div className="flex items-center gap-3 border-b border-[var(--border)] px-4">
               <Search size={16} className="text-slate-500" />
-              <input autoFocus placeholder="Search symbols, futures, or options..." className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-600" onKeyDown={(event) => event.key === "Escape" && setSearchOpen(false)} />
+              <input autoFocus value={searchQuery} placeholder="Search symbols, futures, or options..." className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-600" onChange={(event) => { const value = event.target.value; setSearchQuery(value); if (!value.trim()) { setSearchResults([]); setSearchError(""); } }} onKeyDown={(event) => event.key === "Escape" && setSearchOpen(false)} />
               <kbd className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-slate-500">ESC</kbd>
             </div>
             <div className="px-4 py-3 text-[11px] text-slate-600">Popular symbols <span className="float-right">Stock · Future · Index</span></div>
-            {initialQuotes.slice(0, 4).map((quote) => (
-              <button key={quote.symbol} onClick={() => setSearchOpen(false)} className="flex w-full items-center justify-between px-4 py-2.5 text-left hover:bg-white/5">
-                <span><span className="mr-2 font-medium text-slate-200">{quote.symbol}</span><span className="text-xs text-slate-500">{quote.name}</span></span><span className="text-[10px] uppercase text-slate-600">{quote.type}</span>
+            {searchError && <p role="alert" className="px-4 py-2 text-xs text-rose-400">{searchError}</p>}
+            {(searchQuery.trim() ? searchResults : initialQuotes.slice(0, 4).map((quote) => ({
+              conId: 0,
+              symbol: quote.symbol,
+              name: quote.name,
+              secType: quote.type === "future" ? "FUT" as const : quote.type === "index" ? "IND" as const : "STK" as const,
+              exchange: quote.type === "future" ? "CME" : quote.type === "index" ? "INDEX" : "SMART",
+              currency: "USD",
+            }))).map((instrument) => (
+              <button key={`${instrument.conId}-${instrument.symbol}-${instrument.exchange}-${instrument.currency}`} onClick={() => void addInstrument(instrument)} className="flex w-full items-center justify-between px-4 py-2.5 text-left hover:bg-white/5">
+                <span><span className="mr-2 font-medium text-slate-200">{instrument.symbol}</span><span className="text-xs text-slate-500">{instrument.name}</span></span><span className="text-[10px] uppercase text-slate-500">{instrument.exchange} · {instrument.currency} · {instrument.secType}</span>
               </button>
             ))}
           </div>

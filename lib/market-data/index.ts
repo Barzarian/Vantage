@@ -1,9 +1,11 @@
 import { env } from "./env";
 import { MockMarketDataProvider } from "./mock-provider";
 import type { MarketDataProvider } from "./provider";
+import { IbkrProvider } from "@/lib/providers/ibkr-provider";
 
 const globalForMarketData = globalThis as typeof globalThis & {
   mockMarketDataProvider?: MockMarketDataProvider;
+  ibkrProvider?: IbkrProvider;
 };
 
 export function getMarketDataProvider(): MarketDataProvider {
@@ -12,5 +14,6 @@ export function getMarketDataProvider(): MarketDataProvider {
     return globalForMarketData.mockMarketDataProvider;
   }
 
-  throw new Error("MARKET_DATA_PROVIDER=alpaca is not available yet.");
+  globalForMarketData.ibkrProvider ??= new IbkrProvider();
+  return globalForMarketData.ibkrProvider;
 }

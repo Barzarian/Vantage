@@ -5,6 +5,8 @@
   "packageManager": "pnpm@12.11.2",
   "scripts": {
     "dev": "next dev",
+    "dev:all": "docker compose up -d --wait postgres && pnpm --parallel --filter vantage-market-terminal --filter @vantage/ibkr-bridge dev",
+    "dev:ibkr-bridge": "pnpm --filter @vantage/ibkr-bridge dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

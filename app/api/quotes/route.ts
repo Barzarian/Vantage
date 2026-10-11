@@ -11,8 +11,21 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Provide between 1 and 100 symbols." }, { status: 400 });
   }
 
-  const quotes = await getMarketDataProvider().getQuote(parsed.data);
-  return NextResponse.json(quotes, {
-    headers: { "Cache-Control": "private, max-age=1, stale-while-revalidate=4" },
-  });
+  try {
+    const quotes = await getMarketDataProvider().getQuote(parsed.data);
+    return NextResponse.json(quotes, {
+      headers: { "Cache-Control": "private, max-age=1, stale-while-revalidate=4" },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Quote request failed.";
+    const status =
+      typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
+        ? error.status
+        : 502;
+    const code =
+      typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+        ? error.code
+        : undefined;
+    return NextResponse.json({ error: message, code }, { status });
+  }
 }
