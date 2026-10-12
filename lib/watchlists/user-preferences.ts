@@ -3,6 +3,7 @@ import { getDatabase } from "@/db/client";
 import {
   savedChartIndicators,
   savedChartLayouts,
+  savedFuturesPreferences,
   savedWatchlistPreferences,
 } from "@/db/schema";
 import {
@@ -22,10 +23,11 @@ declare global {
 export async function getUserPreferences(): Promise<UserPreferences> {
   const database = getDatabase();
   if (!database) return userPreferencesSchema.parse(globalThis.localUserPreferences ?? defaults);
-  const [watchlistRows, layoutRows, indicatorRows] = await Promise.all([
+  const [watchlistRows, layoutRows, indicatorRows, futuresRows] = await Promise.all([
     database.db.select().from(savedWatchlistPreferences).where(eq(savedWatchlistPreferences.userId, USER_ID)).limit(1),
     database.db.select().from(savedChartLayouts).where(eq(savedChartLayouts.userId, USER_ID)).limit(1),
     database.db.select().from(savedChartIndicators).where(eq(savedChartIndicators.userId, USER_ID)).limit(1),
+    database.db.select().from(savedFuturesPreferences).where(eq(savedFuturesPreferences.userId, USER_ID)).limit(1),
   ]);
   let current = defaults;
   try {
@@ -37,6 +39,7 @@ export async function getUserPreferences(): Promise<UserPreferences> {
             indicators: indicatorRows[0] ? JSON.parse(indicatorRows[0].indicators) : undefined,
           }
         : defaults.chart,
+      futures: futuresRows[0] ? JSON.parse(futuresRows[0].preferences) : defaults.futures,
     });
   } catch (error) {
     console.error(`[preferences] Stored preferences are invalid: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -58,6 +61,13 @@ export async function saveUserPreferences(value: UserPreferences): Promise<UserP
     }).onConflictDoUpdate({
       target: savedWatchlistPreferences.userId,
       set: { preferences: JSON.stringify(preferences.watchlist), updatedAt: new Date() },
+    }),
+    database.db.insert(savedFuturesPreferences).values({
+      userId: USER_ID,
+      preferences: JSON.stringify(preferences.futures),
+    }).onConflictDoUpdate({
+      target: savedFuturesPreferences.userId,
+      set: { preferences: JSON.stringify(preferences.futures), updatedAt: new Date() },
     }),
     database.db.insert(savedChartLayouts).values({
       userId: USER_ID,

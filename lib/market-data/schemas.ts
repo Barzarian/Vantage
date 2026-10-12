@@ -22,6 +22,9 @@ export const quoteSchema = z.object({
   lastSize: z.number().nonnegative().optional(),
   open: z.number().finite().optional(),
   prevClose: z.number().finite().optional(),
+  settle: z.number().finite().nullable().optional(),
+  prevSettle: z.number().finite().nullable().optional(),
+  openInterest: z.number().int().nonnegative().nullable().optional(),
   dataType: z.enum(["realtime", "delayed", "frozen"]).optional(),
   updatedAt: z.string().datetime(),
 });
@@ -74,13 +77,74 @@ export type OptionChainItem = z.infer<typeof optionChainItemSchema>;
 
 export const optionExpiriesSchema = z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/));
 
+export const futuresSectorSchema = z.enum(["equity index", "energy", "metals", "rates", "grains", "FX"]);
+export const futuresSettlementSchema = z.enum(["cash", "physical"]);
+export const futuresMonthCodeSchema = z.enum(["F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z"]);
+export const futuresRollRuleSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("days-before-expiry"), days: z.number().int().min(0).max(90) }),
+  z.object({ type: z.literal("volume-crossover") }),
+  z.object({ type: z.literal("open-interest-crossover") }),
+]);
+export const futuresAdjustmentSchema = z.enum(["unadjusted", "ratio", "difference"]);
+
+export const futuresRootSchema = z.object({
+  root: z.string().min(1).max(8),
+  name: z.string().min(1),
+  exchange: z.string().min(1),
+  currency: z.string().min(1),
+  tickSize: z.number().positive().finite(),
+  tickValue: z.number().positive().finite(),
+  multiplier: z.number().positive().finite(),
+  contractMonths: z.array(futuresMonthCodeSchema).min(1),
+  tradingHours: z.string().min(1),
+  settlement: futuresSettlementSchema,
+  sector: futuresSectorSchema,
+  approximateMargin: z.number().positive().finite(),
+  rollDays: z.number().int().min(0).max(90).default(5),
+});
+export type FuturesRoot = z.infer<typeof futuresRootSchema>;
+
 export const futuresContractSchema = z.object({
-  symbol: z.string(),
-  expiry: z.string(),
-  last: z.number().finite(),
-  daysToExpiry: z.number().int().nonnegative(),
+  symbol: z.string().min(2),
+  root: z.string().min(1),
+  monthCode: futuresMonthCodeSchema,
+  year: z.number().int().min(1900).max(2200),
+  expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  lastTradeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  firstNoticeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  isFront: z.boolean(),
 });
 export type FuturesContract = z.infer<typeof futuresContractSchema>;
+
+export const futuresQuoteSchema = z.object({
+  symbol: z.string().min(2),
+  last: z.number().finite().nullable(),
+  bid: z.number().finite().nullable(),
+  ask: z.number().finite().nullable(),
+  settle: z.number().finite().nullable(),
+  prevSettle: z.number().finite().nullable(),
+  volume: z.number().int().nonnegative().nullable(),
+  openInterest: z.number().int().nonnegative().nullable(),
+  change: z.number().finite().nullable(),
+  lastUpdate: z.string().datetime(),
+});
+export type FuturesQuote = z.infer<typeof futuresQuoteSchema>;
+
+export const futuresCurvePointSchema = z.object({
+  contract: futuresContractSchema,
+  quote: futuresQuoteSchema,
+  daysToExpiry: z.number().int().nonnegative(),
+  daysToFirstNotice: z.number().int().nonnegative().nullable(),
+});
+export type FuturesCurvePoint = z.infer<typeof futuresCurvePointSchema>;
+
+export const futuresPreferenceSchema = z.object({
+  adjustment: futuresAdjustmentSchema,
+  rollRule: futuresRollRuleSchema,
+  chartOverlays: z.array(z.enum(["SMA", "EMA", "VWAP", "Bollinger"])).max(8),
+  lastRoot: z.string().max(8),
+});
+export type FuturesPreference = z.infer<typeof futuresPreferenceSchema>;
 
 export const instrumentSearchResultSchema = z.object({
   conId: z.number().int().positive(),

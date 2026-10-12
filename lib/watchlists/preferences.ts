@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { futuresPreferenceSchema } from "@/lib/market-data/schemas";
+import { findFuturesRoot } from "@/lib/futures/specs";
+import { futuresRootFromSymbol } from "@/lib/futures/contracts";
 
 export const watchlistColumnSchema = z.enum([
   "symbol",
@@ -57,6 +60,12 @@ export type ChartPreferences = z.infer<typeof chartPreferencesSchema>;
 export const userPreferencesSchema = z.object({
   watchlist: watchlistPreferencesSchema,
   chart: chartPreferencesSchema,
+  futures: futuresPreferenceSchema.default({
+    adjustment: "unadjusted",
+    rollRule: { type: "days-before-expiry", days: 5 },
+    chartOverlays: [],
+    lastRoot: "ES",
+  }),
 });
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
@@ -81,13 +90,19 @@ export const defaultChartPreferences: ChartPreferences = {
 export const defaultUserPreferences: UserPreferences = {
   watchlist: defaultWatchlistPreferences,
   chart: defaultChartPreferences,
+  futures: {
+    adjustment: "unadjusted",
+    rollRule: { type: "days-before-expiry", days: 5 },
+    chartOverlays: [],
+    lastRoot: "ES",
+  },
 };
 
 export function formatPrice(value: number, symbol: string, assetClass: string): string {
   let digits = 2;
   if (assetClass === "future") {
-    const tickDigits: Record<string, number> = { ES: 2, NQ: 2, CL: 2, GC: 1, ZB: 3 };
-    digits = tickDigits[symbol.replace(/[FGHJKMNQUVXZ]\d{1,2}$/i, "")] ?? 2;
+    const root = findFuturesRoot(futuresRootFromSymbol(symbol));
+    digits = root ? Math.max(0, (String(root.tickSize).split(".")[1] ?? "").length) : 2;
   }
   return value.toLocaleString("en-US", {
     minimumFractionDigits: digits,

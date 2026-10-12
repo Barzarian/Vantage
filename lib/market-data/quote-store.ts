@@ -1,17 +1,21 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { optionQuoteSchema, quoteSchema, type OptionQuote, type Quote } from "./schemas";
+import { futuresQuoteSchema, optionQuoteSchema, quoteSchema, type FuturesQuote, type OptionQuote, type Quote } from "./schemas";
 
 export type QuoteConnectionState = "connecting" | "live" | "stale" | "disconnected";
 export type QuoteSnapshot = { quote: Quote; stale: boolean; history: number[] };
 export type OptionQuoteSnapshot = { quote: OptionQuote; stale: boolean };
+export type FuturesQuoteSnapshot = { quote: FuturesQuote; stale: boolean };
+const disconnectedStatus = { state: "disconnected" as const, lastUpdate: null };
 
 export class QuoteStore {
   private readonly snapshots = new Map<string, QuoteSnapshot>();
   private readonly quoteListeners = new Map<string, Set<() => void>>();
   private readonly optionSnapshots = new Map<string, OptionQuoteSnapshot>();
   private readonly optionListeners = new Map<string, Set<() => void>>();
+  private readonly futuresSnapshots = new Map<string, FuturesQuoteSnapshot>();
+  private readonly futuresListeners = new Map<string, Set<() => void>>();
   private readonly statusListeners = new Set<() => void>();
   private connectionState: QuoteConnectionState = "disconnected";
   private lastUpdate: string | null = null;
@@ -30,6 +34,10 @@ export class QuoteStore {
 
   getOption(occSymbol: string): OptionQuoteSnapshot | undefined {
     return this.optionSnapshots.get(occSymbol);
+  }
+
+  getFutures(symbol: string): FuturesQuoteSnapshot | undefined {
+    return this.futuresSnapshots.get(symbol.toUpperCase());
   }
 
   subscribe(symbol: string, listener: () => void): () => void {
@@ -57,6 +65,17 @@ export class QuoteStore {
     };
   }
 
+  subscribeFutures(symbol: string, listener: () => void): () => void {
+    const key = symbol.toUpperCase();
+    const listeners = this.futuresListeners.get(key) ?? new Set();
+    listeners.add(listener);
+    this.futuresListeners.set(key, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.futuresListeners.delete(key);
+    };
+  }
+
   update(input: Quote): void {
     const quote = quoteSchema.parse(input);
     this.saveQuote(quote);
@@ -72,9 +91,27 @@ export class QuoteStore {
       const quote = quoteSchema.parse(input);
       this.saveQuote(quote);
       changed.add(quote.symbol);
+      if (quote.type === "future") {
+        const futureQuote = futuresQuoteSchema.parse({
+          symbol: quote.symbol,
+          last: quote.last,
+          bid: quote.bid,
+          ask: quote.ask,
+          settle: quote.settle ?? quote.prevSettle ?? quote.prevClose ?? null,
+          prevSettle: quote.prevSettle ?? quote.prevClose ?? null,
+          volume: quote.volume,
+          openInterest: quote.openInterest ?? null,
+          change: quote.change,
+          lastUpdate: quote.updatedAt,
+        });
+        this.futuresSnapshots.set(quote.symbol.toUpperCase(), { quote: futureQuote, stale: false });
+      }
       if (!this.lastUpdate || quote.updatedAt > this.lastUpdate) this.lastUpdate = quote.updatedAt;
     }
-    for (const symbol of changed) this.notifyQuote(symbol);
+    for (const symbol of changed) {
+      this.notifyQuote(symbol);
+      for (const listener of this.futuresListeners.get(symbol.toUpperCase()) ?? []) listener();
+    }
     if (changed.size > 0) {
       this.refreshStatusSnapshot();
       this.refreshConnectionState();
@@ -118,6 +155,14 @@ export class QuoteStore {
         this.optionSnapshots.set(occSymbol, { ...snapshot, stale });
         for (const listener of this.optionListeners.get(occSymbol) ?? []) listener();
         changed = true;
+      }
+      for (const [symbol, snapshot] of this.futuresSnapshots) {
+        const stale = now - Date.parse(snapshot.quote.lastUpdate) > staleAfterMs;
+        if (snapshot.stale !== stale) {
+          this.futuresSnapshots.set(symbol, { ...snapshot, stale });
+          for (const listener of this.futuresListeners.get(symbol) ?? []) listener();
+          changed = true;
+        }
       }
     }
     const hasRecentTick = [...this.snapshots.values()].some(
@@ -185,7 +230,7 @@ export function useQuoteConnection(): ReturnType<QuoteStore["getStatus"]> {
   return useSyncExternalStore(
     (listener) => quoteStore.subscribeStatus(listener),
     () => quoteStore.getStatus(),
-    () => ({ state: "disconnected", lastUpdate: null }),
+    () => disconnectedStatus,
   );
 }
 
@@ -193,6 +238,14 @@ export function useOptionQuote(occSymbol: string): OptionQuoteSnapshot | undefin
   return useSyncExternalStore(
     (listener) => quoteStore.subscribeOption(occSymbol, listener),
     () => quoteStore.getOption(occSymbol),
+    () => undefined,
+  );
+}
+
+export function useFuturesQuote(symbol: string): FuturesQuoteSnapshot | undefined {
+  return useSyncExternalStore(
+    (listener) => quoteStore.subscribeFutures(symbol, listener),
+    () => quoteStore.getFutures(symbol),
     () => undefined,
   );
 }

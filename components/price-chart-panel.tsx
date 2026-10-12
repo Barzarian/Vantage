@@ -8,20 +8,24 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
   HistogramSeries,
   LineSeries,
   PriceScaleMode,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type LogicalRange,
   type Time,
+  type SeriesMarker,
 } from "lightweight-charts";
 import { ArrowLeft, Maximize2, Plus, Search, Trash2 } from "lucide-react";
 import { useQuote } from "@/lib/market-data/quote-store";
 import { marketStreamManager } from "@/lib/market-data/stream-manager";
 import { barSchema, quoteSchema, type Bar, type Quote } from "@/lib/market-data/schemas";
 import type { Timeframe } from "@/lib/market-data/provider";
+import type { ContinuousAdjustment } from "@/lib/market-data/provider";
 import {
   chartRangeSchema,
   chartTypeSchema,
@@ -54,6 +58,9 @@ const RANGE_SECONDS: Record<(typeof RANGES)[number], number> = {
 };
 type Props = {
   config: ChartPaneConfig;
+  continuousRoot?: string;
+  continuousAdjustment?: ContinuousAdjustment;
+  rollDates?: number[];
   onChange: (config: ChartPaneConfig) => void;
   paneIndex: number;
   paneCount: number;
@@ -84,20 +91,22 @@ function parseBars(value: unknown): Bar[] {
   return barSchema.array().parse(value);
 }
 
-function useBars(symbol: string, timeframe: Timeframe, range: ChartPaneConfig["range"]) {
+function useBars(
+  symbol: string,
+  timeframe: Timeframe,
+  range: ChartPaneConfig["range"],
+  continuous?: { root: string; adjustment: ContinuousAdjustment },
+) {
   const [to] = useState(() => Math.floor(Date.now() / 1000));
   const from = rangeStart(range, to);
   const query = useQuery({
-    queryKey: ["bars", symbol, timeframe, range, to],
+    queryKey: ["bars", symbol, timeframe, range, to, continuous?.root, continuous?.adjustment],
     queryFn: async () => {
-      const params = new URLSearchParams({
-        symbol,
-        timeframe,
-        from: String(from),
-        to: String(to),
-        limit: "5000",
-      });
-      const response = await fetch(`/api/bars?${params.toString()}`, { cache: "no-store" });
+      const params = new URLSearchParams({ timeframe, from: String(from), to: String(to) });
+      const path = continuous
+        ? `/api/futures/${encodeURIComponent(continuous.root)}/bars?${new URLSearchParams({ ...Object.fromEntries(params), adjustment: continuous.adjustment })}`
+        : `/api/bars?${new URLSearchParams({ ...Object.fromEntries(params), symbol, limit: "5000" })}`;
+      const response = await fetch(path, { cache: "no-store" });
       const body: unknown = await response.json();
       if (!response.ok) {
         const message = typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
@@ -153,6 +162,9 @@ function IndicatorPane({ indicator, bars }: { indicator: IndicatorConfig; bars: 
 
 export function PriceChartPanel({
   config,
+  continuousRoot,
+  continuousAdjustment = "unadjusted",
+  rollDates = [],
   onChange,
   paneIndex,
   paneCount,
@@ -170,6 +182,7 @@ export function PriceChartPanel({
   const volumeSeries = useRef<ISeriesApi<"Histogram"> | null>(null);
   const compareSeries = useRef<ISeriesApi<"Line"> | null>(null);
   const lastPriceLine = useRef<IPriceLine | null>(null);
+  const rollMarkers = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const loadingOlder = useRef(false);
   const exhaustedHistoryAt = useRef<number | null>(null);
   const chartDataRef = useRef<Bar[]>([]);
@@ -188,7 +201,11 @@ export function PriceChartPanel({
   const [compareQuery, setCompareQuery] = useState("");
   const [symbolValue, setSymbolValue] = useState(config.symbol);
   const quoteSnapshot = useQuote(config.symbol);
-  const query = useBars(config.symbol, config.timeframe, config.range);
+  const continuous = useMemo(
+    () => continuousRoot ? { root: continuousRoot, adjustment: continuousAdjustment } : undefined,
+    [continuousAdjustment, continuousRoot],
+  );
+  const query = useBars(config.symbol, config.timeframe, config.range, continuous);
   const bars = useMemo(() => query.data ?? [], [query.data]);
   const compareQueryResult = useBars(
     config.compareSymbol ?? config.symbol,
@@ -239,15 +256,16 @@ export function PriceChartPanel({
     const earliest = current[0]!.time;
     if (exhaustedHistoryAt.current !== null && earliest >= exhaustedHistoryAt.current) return;
     const params = new URLSearchParams({
-      symbol: config.symbol,
       timeframe: config.timeframe,
       from: String(Math.max(1, earliest - RANGE_SECONDS[config.range])),
       to: String(Math.max(1, earliest - 1)),
-      limit: "5000",
     });
     loadingOlder.current = true;
     try {
-      const response = await fetch(`/api/bars?${params}`, { cache: "no-store" });
+      const path = continuous
+        ? `/api/futures/${encodeURIComponent(continuous.root)}/bars?${new URLSearchParams({ ...Object.fromEntries(params), adjustment: continuous.adjustment })}`
+        : `/api/bars?${new URLSearchParams({ ...Object.fromEntries(params), symbol: config.symbol, limit: "5000" })}`;
+      const response = await fetch(path, { cache: "no-store" });
       const payload: unknown = await response.json();
       if (!response.ok) {
         const message = typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string"
@@ -264,7 +282,7 @@ export function PriceChartPanel({
     } finally {
       loadingOlder.current = false;
     }
-  }, [config.range, config.symbol, config.timeframe]);
+  }, [config.range, config.symbol, config.timeframe, continuous]);
 
   useEffect(() => {
     const element = container.current;
@@ -359,6 +377,7 @@ export function PriceChartPanel({
     priceSeries.current = series;
     volumeSeries.current = volumes;
     compareSeries.current = comparison;
+    rollMarkers.current = createSeriesMarkers(series, []);
     const resize = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
       if (rect && rect.width > 0 && rect.height > 0) chart.applyOptions({ width: rect.width, height: rect.height });
@@ -388,6 +407,8 @@ export function PriceChartPanel({
     });
     return () => {
       resize.disconnect();
+      rollMarkers.current?.detach();
+      rollMarkers.current = null;
       chart.remove();
       chartRef.current = null;
       priceSeries.current = null;
@@ -414,6 +435,17 @@ export function PriceChartPanel({
       return { ...base, open: bar.open, high: bar.high, low: bar.low, close: bar.close };
     });
     series.setData(formatted as never);
+    const markers: SeriesMarker<Time>[] = rollDates.flatMap((rollDate) => {
+      const nextBar = chartData.find((bar) => bar.time >= rollDate);
+      return nextBar ? [{
+        time: nextBar.time as Time,
+        position: "aboveBar",
+        color: "#fbbf24",
+        shape: "arrowDown",
+        text: "ROLL",
+      }] : [];
+    });
+    rollMarkers.current?.setMarkers(markers);
     volumes.setData(chartData.map((bar) => ({
       time: bar.time as Time,
       value: bar.volume,
@@ -423,7 +455,7 @@ export function PriceChartPanel({
       chartRef.current?.timeScale().fitContent();
       initialFit.current = true;
     }
-  }, [chartData, chartType, query.data?.length]);
+  }, [chartData, chartType, query.data?.length, rollDates]);
 
   useEffect(() => {
     if (latestQuote?.last === undefined || !lastPriceLine.current) return;

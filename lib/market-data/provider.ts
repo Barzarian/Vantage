@@ -1,6 +1,8 @@
 import type {
   Bar,
   FuturesContract,
+  FuturesCurvePoint,
+  FuturesRoot,
   InstrumentSearchResult,
   OptionChainItem,
   OptionQuote,
@@ -14,6 +16,7 @@ export type BarRange = { from: number; to: number; limit?: number };
 export type TickListener = (tick: Tick) => void;
 export type BarListener = (symbol: string, bar: AggregatedBar) => void;
 export type OptionTickListener = (tick: OptionQuote) => void;
+export type ContinuousAdjustment = "unadjusted" | "ratio" | "difference";
 export type ProviderStreamStatus = {
   state?: "disconnected" | "connecting" | "reconnecting" | "live";
   marketDataType?: number;
@@ -27,7 +30,15 @@ export interface MarketDataProvider {
   getBars(symbol: string, timeframe: Timeframe, range: BarRange): Promise<Bar[]>;
   getOptionExpiries(underlying: string): Promise<string[]>;
   getOptionChain(underlying: string, expiry: string): Promise<OptionChainItem[]>;
-  getFuturesCurve(root: string): Promise<FuturesContract[]>;
+  getFuturesRoots(): Promise<FuturesRoot[]>;
+  getFuturesContracts(root: string): Promise<FuturesContract[]>;
+  getFuturesCurve(root: string): Promise<FuturesCurvePoint[]>;
+  getContinuousBars(
+    root: string,
+    timeframe: Timeframe,
+    range: BarRange,
+    adjustment: ContinuousAdjustment,
+  ): Promise<Bar[]>;
   subscribe(
     symbols: string[],
     onTick: TickListener,

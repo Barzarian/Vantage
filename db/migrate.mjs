@@ -8,7 +8,7 @@ if (!url) {
 } else {
   const client = postgres(url, { max: 1 });
   try {
-    for (const name of ["0001_watchlists.sql", "0002_saved_strategies.sql"]) {
+    for (const name of ["0001_watchlists.sql", "0002_saved_strategies.sql", "0003_futures_preferences.sql"]) {
       const migration = await readFile(new URL(`./migrations/${name}`, import.meta.url), "utf8");
       await client.unsafe(migration);
       console.info(`Applied migration ${name}`);

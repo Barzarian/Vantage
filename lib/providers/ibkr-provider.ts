@@ -12,14 +12,22 @@ import type {
 import {
   barSchema,
   futuresContractSchema,
+  futuresCurvePointSchema,
+  futuresRootSchema,
   quoteSchema,
   instrumentSearchResultSchema,
   type OptionChainItem,
   type Bar,
   type FuturesContract,
+  type FuturesCurvePoint,
+  type FuturesRoot,
   type InstrumentSearchResult,
   type Quote,
 } from "@/lib/market-data/schemas";
+import { FUTURES_ROOTS, getFuturesRoot } from "@/lib/futures/specs";
+import { buildFuturesContracts, daysToExpiry, daysToFirstNotice } from "@/lib/futures/contracts";
+import { buildContinuousBars } from "@/lib/futures/continuous";
+import type { ContinuousAdjustment } from "@/lib/market-data/provider";
 
 const normalizedQuoteSchema = z.object({
   conId: z.number().int().positive(),
@@ -121,9 +129,76 @@ export class IbkrProvider implements MarketDataProvider {
     );
   }
 
-  async getFuturesCurve(root: string): Promise<FuturesContract[]> {
-    const raw = await this.request(`/curve?root=${encodeURIComponent(root)}`);
-    return z.array(futuresContractSchema).parse(raw);
+  async getFuturesRoots(): Promise<FuturesRoot[]> {
+    return futuresRootSchema.array().parse(FUTURES_ROOTS);
+  }
+
+  async getFuturesContracts(rootSymbol: string): Promise<FuturesContract[]> {
+    const root = getFuturesRoot(rootSymbol);
+    const raw = await this.request(`/curve?root=${encodeURIComponent(root.root)}&exchange=${encodeURIComponent(root.exchange)}&currency=${encodeURIComponent(root.currency)}`);
+    const listed = z.array(z.object({
+      symbol: z.string(),
+      expiry: z.string(),
+      last: z.number().finite(),
+      daysToExpiry: z.number().int().nonnegative(),
+    })).parse(raw);
+    const catalog = buildFuturesContracts(root, new Date(), 36);
+    const bySymbol = new Map(catalog.map((contract) => [contract.symbol, contract]));
+    return listed.flatMap(({ symbol }) => {
+      const match = bySymbol.get(symbol.replace(/\s+/g, "").toUpperCase());
+      return match ? [futuresContractSchema.parse(match)] : [];
+    });
+  }
+
+  async getFuturesCurve(rootSymbol: string): Promise<FuturesCurvePoint[]> {
+    const root = getFuturesRoot(rootSymbol);
+    const [listed, contracts] = await Promise.all([
+      this.request(`/curve?root=${encodeURIComponent(root.root)}&exchange=${encodeURIComponent(root.exchange)}&currency=${encodeURIComponent(root.currency)}`)
+        .then((raw) => z.array(z.object({
+          symbol: z.string(),
+          expiry: z.string(),
+          last: z.number().finite(),
+          daysToExpiry: z.number().int().nonnegative(),
+        })).parse(raw)),
+      this.getFuturesContracts(root.root),
+    ]);
+    const bySymbol = new Map(contracts.map((contract) => [contract.symbol, contract]));
+    const now = new Date();
+    return listed.flatMap((entry) => {
+      const contract = bySymbol.get(entry.symbol.replace(/\s+/g, "").toUpperCase());
+      if (!contract) return [];
+      return [futuresCurvePointSchema.parse({
+        contract,
+        quote: {
+          symbol: contract.symbol,
+          last: entry.last,
+          bid: null,
+          ask: null,
+          settle: null,
+          prevSettle: null,
+          volume: null,
+          openInterest: null,
+          change: null,
+          lastUpdate: now.toISOString(),
+        },
+        daysToExpiry: daysToExpiry(contract, now),
+        daysToFirstNotice: daysToFirstNotice(contract, now),
+      })];
+    });
+  }
+
+  async getContinuousBars(rootSymbol: string, timeframe: Timeframe, range: BarRange, adjustment: ContinuousAdjustment): Promise<Bar[]> {
+    const root = getFuturesRoot(rootSymbol);
+    const contracts = buildFuturesContracts(root, new Date(Date.parse(new Date(range.from * 1000).toISOString()) - 540 * 86400000), 24);
+    const boundaries = contracts.slice(0, -1).map((contract) => Math.floor(Date.parse(`${contract.lastTradeDate}T16:00:00Z`) / 1000));
+    const series = await Promise.all(contracts.map(async (contract, index) => {
+      const from = Math.max(range.from, boundaries[index - 1] ?? range.from);
+      const to = Math.min(range.to, boundaries[index] ?? range.to);
+      return from >= to
+        ? { symbol: contract.symbol, bars: [] }
+        : { symbol: contract.symbol, bars: await this.getBars(contract.symbol, timeframe, { ...range, from, to }) };
+    }));
+    return buildContinuousBars(series, adjustment);
   }
 
   async searchSymbols(query: string): Promise<InstrumentSearchResult[]> {

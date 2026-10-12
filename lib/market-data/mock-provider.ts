@@ -1,6 +1,8 @@
 import {
   barSchema,
-  futuresContractSchema,
+  futuresCurvePointSchema,
+  futuresQuoteSchema,
+  futuresRootSchema,
   optionChainItemSchema,
   optionContractSchema,
   optionQuoteSchema,
@@ -14,11 +16,17 @@ import {
 } from "./schemas";
 import type { BarRange, MarketDataProvider, TickListener, Timeframe } from "./provider";
 import type { BarListener } from "./provider";
+import type { ContinuousAdjustment } from "./provider";
 import { BarAggregator } from "@/services/ibkr-bridge/src/bar-aggregator";
 import { calculateBlackScholes } from "@/lib/greeks/black-scholes";
 import { optionExpiryTimestamp } from "@/lib/greeks/expiry";
 import { formatOccSymbol, parseOccSymbol } from "@/lib/greeks/occ";
 import type { OptionTickListener } from "./provider";
+import { FUTURES_ROOTS, getFuturesRoot } from "@/lib/futures/specs";
+import { buildFuturesContracts, daysToExpiry, daysToFirstNotice, parseFuturesSymbol } from "@/lib/futures/contracts";
+import { buildContinuousBars } from "@/lib/futures/continuous";
+import { roundToTick } from "@/lib/futures/curve";
+import { futuresSessionStatus } from "@/lib/futures/sessions";
 
 const SEEDS: Record<string, { name: string; type: Quote["type"]; price: number }> = {
   SPX: { name: "S&P 500", type: "index", price: 5824.5 },
@@ -27,8 +35,18 @@ const SEEDS: Record<string, { name: string; type: Quote["type"]; price: number }
   VIX: { name: "CBOE Volatility Index", type: "index", price: 18.42 },
   ES: { name: "E-mini S&P 500", type: "future", price: 5836.25 },
   NQ: { name: "E-mini Nasdaq 100", type: "future", price: 20465.5 },
+  RTY: { name: "E-mini Russell 2000", type: "future", price: 2184.3 },
+  YM: { name: "E-mini Dow ($5)", type: "future", price: 42715 },
   CL: { name: "Crude Oil", type: "future", price: 72.84 },
+  NG: { name: "Henry Hub Natural Gas", type: "future", price: 3.1 },
   GC: { name: "Gold", type: "future", price: 2678.3 },
+  SI: { name: "Silver", type: "future", price: 31.4 },
+  HG: { name: "Copper", type: "future", price: 4.55 },
+  ZB: { name: "30-Year Treasury Bond", type: "future", price: 118.75 },
+  ZN: { name: "10-Year Treasury Note", type: "future", price: 110.25 },
+  ZC: { name: "Corn", type: "future", price: 425 },
+  ZS: { name: "Soybeans", type: "future", price: 1032 },
+  "6E": { name: "Euro FX", type: "future", price: 1.09 },
   DXY: { name: "U.S. Dollar Index", type: "index", price: 103.72 },
   "10Y": { name: "10-Year Treasury Yield", type: "index", price: 4.18 },
   AAPL: { name: "Apple Inc.", type: "stock", price: 228.62 },
@@ -57,15 +75,59 @@ const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
 
 function priceFor(symbol: string): number {
   if (BASES[symbol]) return BASES[symbol];
+  try {
+    const parsed = parseFuturesSymbol(symbol);
+    const root = BASES[parsed.root];
+    if (root) return root;
+  } catch {
+    // Non-futures symbols use a stable synthetic base below.
+  }
   const seed = [...symbol].reduce((total, char) => total + char.charCodeAt(0), 0);
   return Math.max(1, (seed * 1.713) % 500 + 20);
 }
 
 function typeFor(symbol: string): Quote["type"] {
-  return SEEDS[symbol]?.type ?? (symbol.includes(" ") ? "option" : "stock");
+  if (SEEDS[symbol]) return SEEDS[symbol]!.type;
+  try {
+    parseFuturesSymbol(symbol);
+    return "future";
+  } catch {
+    return symbol.includes(" ") ? "option" : "stock";
+  }
 }
 
 function makeQuote(symbol: string, previous?: number, previousVolume?: number): Quote {
+  if (/^.+[FGHJKMNQUVXZ]\d{1,2}$/i.test(symbol)) {
+    const contract = parseFuturesSymbol(symbol);
+    const root = getFuturesRoot(contract.root);
+    const contracts = buildFuturesContracts(root);
+    const index = Math.max(0, contracts.findIndex((entry) => entry.symbol === symbol.toUpperCase()));
+    const slope = contract.root === "CL" ? -0.0022 : contract.root === "GC" ? 0.0016 : 0.0008;
+    const baseline = roundToTick(priceFor(contract.root) * (1 + index * slope), root.tickSize);
+    const pulse = Math.sin(Date.now() / 6_000 + stableFraction(contract.root) * 6) * root.tickSize * 1.4;
+    const last = roundToTick(baseline + pulse, root.tickSize);
+    const spread = root.tickSize;
+    const change = roundToTick(last - baseline, root.tickSize);
+    return quoteSchema.parse({
+      symbol: symbol.toUpperCase(),
+      name: root.name,
+      type: "future",
+      last,
+      change,
+      changePercent: baseline ? (change / baseline) * 100 : 0,
+      bid: roundToTick(last - spread, root.tickSize),
+      ask: roundToTick(last + spread, root.tickSize),
+      volume: previousVolume === undefined ? stableInteger(`${symbol}:volume`, 2_000, 160_000) : previousVolume + 1,
+      openInterest: stableInteger(`${symbol}:oi`, 4_000, 220_000),
+      settle: baseline,
+      prevSettle: baseline,
+      dayLow: last - root.tickSize * 8,
+      dayHigh: last + root.tickSize * 8,
+      weekLow: baseline * 0.97,
+      weekHigh: baseline * 1.03,
+      updatedAt: new Date().toISOString(),
+    });
+  }
   const baseline = priceFor(symbol);
   const prior = previous ?? baseline * (1 + (Math.random() - 0.5) * 0.025);
   const last = Math.max(0.01, prior * (1 + (Math.random() - 0.5) * 0.0008));
@@ -111,9 +173,8 @@ export class MockMarketDataProvider implements MarketDataProvider {
 
   async searchSymbols(query: string): Promise<InstrumentSearchResult[]> {
     const normalized = query.trim().toUpperCase();
-    return Object.entries(SEEDS)
+    const matches: InstrumentSearchResult[] = Object.entries(SEEDS)
       .filter(([symbol, seed]) => symbol.startsWith(normalized) || seed.name.toUpperCase().includes(normalized))
-      .slice(0, 20)
       .map(([symbol, seed]) => ({
         conId: [...symbol].reduce((total, character) => total * 31 + character.charCodeAt(0), 0) >>> 0 || 1,
         symbol,
@@ -123,6 +184,24 @@ export class MockMarketDataProvider implements MarketDataProvider {
         primaryExchange: seed.type === "stock" ? "NASDAQ" : undefined,
         currency: "USD",
       }));
+    for (const root of FUTURES_ROOTS.filter((entry) =>
+      entry.root.startsWith(normalized) || entry.name.toUpperCase().includes(normalized),
+    )) {
+      const front = buildFuturesContracts(root)[0];
+      if (!front) continue;
+      matches.push({
+        conId: stableHash(front.symbol) || 1,
+        symbol: front.symbol,
+        localSymbol: front.symbol,
+        name: root.name,
+        secType: "FUT",
+        exchange: root.exchange,
+        currency: root.currency,
+        multiplier: String(root.multiplier),
+        lastTradeDate: front.lastTradeDate,
+      });
+    }
+    return matches.slice(0, 20);
   }
 
   async getBars(symbol: string, timeframe: Timeframe, range: BarRange): Promise<Bar[]> {
@@ -293,17 +372,74 @@ export class MockMarketDataProvider implements MarketDataProvider {
     });
   }
 
-  async getFuturesCurve(root: string): Promise<FuturesContract[]> {
-    const base = priceFor(root);
-    return Array.from({ length: 8 }, (_, index) => {
-      const expiryDate = new Date(Date.now() + (25 + index * 30) * 86400000);
-      return futuresContractSchema.parse({
-        symbol: `${root}${expiryDate.toISOString().slice(2, 7).replace("-", "")}`,
-        expiry: expiryDate.toISOString().slice(0, 10),
-        last: base * (1 + index * 0.0015 + (Math.random() - 0.5) * 0.0005),
-        daysToExpiry: Math.ceil((expiryDate.getTime() - Date.now()) / 86400000),
+  async getFuturesRoots() {
+    return futuresRootSchema.array().parse(FUTURES_ROOTS);
+  }
+
+  async getFuturesContracts(root: string): Promise<FuturesContract[]> {
+    return buildFuturesContracts(getFuturesRoot(root));
+  }
+
+  async getFuturesCurve(rootSymbol: string) {
+    const root = getFuturesRoot(rootSymbol);
+    const contracts = buildFuturesContracts(root);
+    const base = priceFor(root.root);
+    const slope = root.root === "CL" ? -0.0022 : root.root === "GC" ? 0.0016 : 0.0008;
+    const now = new Date();
+    const front = contracts[0]!;
+    const firstNoticeDays = front.firstNoticeDate
+      ? daysToFirstNotice(front, now)
+      : null;
+    const isRolling = daysToExpiry(front, now) <= root.rollDays ||
+      (firstNoticeDays !== null && firstNoticeDays <= root.rollDays);
+    return contracts.map((contract, index) => {
+      const settle = roundToTick(base * (1 + index * slope), root.tickSize);
+      const move = roundToTick(
+        Math.sin(Date.now() / 6_000 + stableFraction(root.root) * 6) * root.tickSize * 1.4,
+        root.tickSize,
+      );
+      const last = roundToTick(settle + move, root.tickSize);
+      const frontVolume = index === 0 ? (isRolling ? 24_000 : 128_000) : index === 1 ? (isRolling ? 142_000 : 74_000) : 25_000;
+      const frontOi = index === 0 ? (isRolling ? 78_000 : 190_000) : index === 1 ? (isRolling ? 180_000 : 100_000) : 45_000;
+      return futuresCurvePointSchema.parse({
+        contract,
+        quote: futuresQuoteSchema.parse({
+          symbol: contract.symbol,
+          last,
+          bid: roundToTick(last - root.tickSize, root.tickSize),
+          ask: roundToTick(last + root.tickSize, root.tickSize),
+          settle,
+          prevSettle: settle,
+          volume: frontVolume + stableInteger(`${contract.symbol}:curve-volume`, -Math.floor(frontVolume * 0.12), Math.floor(frontVolume * 0.12)),
+          openInterest: frontOi + stableInteger(`${contract.symbol}:curve-oi`, -Math.floor(frontOi * 0.12), Math.floor(frontOi * 0.12)),
+          change: roundToTick(last - settle, root.tickSize),
+          lastUpdate: now.toISOString(),
+        }),
+        daysToExpiry: daysToExpiry(contract, now),
+        daysToFirstNotice: daysToFirstNotice(contract, now),
       });
     });
+  }
+
+  async getContinuousBars(root: string, timeframe: Timeframe, range: BarRange, adjustment: ContinuousAdjustment): Promise<Bar[]> {
+    const specs = getFuturesRoot(root);
+    const monthsAgo = new Date(range.from * 1000);
+    monthsAgo.setUTCMonth(monthsAgo.getUTCMonth() - 2);
+    const contracts = buildFuturesContracts(specs, monthsAgo, 18);
+    const rollTimes = contracts.slice(0, -1).map((contract) =>
+      Math.floor(Date.parse(`${contract.lastTradeDate}T16:00:00Z`) / 1000),
+    );
+    const series = await Promise.all(contracts.map(async (contract, index) => {
+      const from = Math.max(range.from, rollTimes[index - 1] ?? range.from);
+      const to = Math.min(range.to, rollTimes[index] ?? range.to);
+      if (from >= to) return { symbol: contract.symbol, bars: [] };
+      return {
+        symbol: contract.symbol,
+        bars: await this.getBars(contract.symbol, timeframe, { ...range, from, to }),
+      };
+    }));
+    return buildContinuousBars(series, adjustment)
+      .filter((bar) => futuresSessionStatus(specs, new Date(bar.time * 1000)) === "open");
   }
 
   subscribe(

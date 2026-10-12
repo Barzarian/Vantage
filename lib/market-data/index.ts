@@ -10,10 +10,20 @@ const globalForMarketData = globalThis as typeof globalThis & {
 
 export function getMarketDataProvider(): MarketDataProvider {
   if (env.MARKET_DATA_PROVIDER === "mock") {
-    globalForMarketData.mockMarketDataProvider ??= new MockMarketDataProvider();
+    if (
+      !globalForMarketData.mockMarketDataProvider ||
+      typeof globalForMarketData.mockMarketDataProvider.getFuturesRoots !== "function"
+    ) {
+      globalForMarketData.mockMarketDataProvider = new MockMarketDataProvider();
+    }
     return globalForMarketData.mockMarketDataProvider;
   }
 
-  globalForMarketData.ibkrProvider ??= new IbkrProvider();
+  if (
+    !globalForMarketData.ibkrProvider ||
+    typeof globalForMarketData.ibkrProvider.getFuturesContracts !== "function"
+  ) {
+    globalForMarketData.ibkrProvider = new IbkrProvider();
+  }
   return globalForMarketData.ibkrProvider;
 }

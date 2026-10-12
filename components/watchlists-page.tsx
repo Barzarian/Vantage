@@ -29,6 +29,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { InstrumentSearchResult } from "@/lib/market-data/schemas";
+import { futuresRootFromSymbol } from "@/lib/futures/contracts";
 import { instrumentSearchResultSchema, quoteSchema } from "@/lib/market-data/schemas";
 import { quoteStore, useQuoteConnection } from "@/lib/market-data/quote-store";
 import { marketStreamManager } from "@/lib/market-data/stream-manager";
@@ -227,7 +228,9 @@ export function WatchlistsPage() {
         if (next) setSelectedItemId(next.id);
       } else if (!isEditing && event.key === "Enter" && selectedIndex >= 0) {
         const item = active?.items[selectedIndex];
-        if (item) router.push(`/chart/${encodeURIComponent(item.symbol)}`);
+        if (item) router.push(item.assetClass === "future"
+          ? `/futures/${encodeURIComponent(futuresRootFromSymbol(item.symbol))}?contract=${encodeURIComponent(item.symbol)}`
+          : `/chart/${encodeURIComponent(item.symbol)}`);
       } else if (!isEditing && event.key === "Delete" && selectedIndex >= 0) {
         const item = active?.items[selectedIndex];
         if (item) selectedRemoval.current?.(item.id, item.watchlistId);
@@ -608,7 +611,10 @@ export function WatchlistsPage() {
             return item ? <div className="flex h-full min-h-[560px] flex-col">
               <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
                 <div><div className="text-[10px] uppercase tracking-wider text-slate-500">Selected instrument</div><div className="mt-1 text-sm font-semibold">{item.symbol} <span className="font-normal text-slate-500">{quote?.name}</span></div></div>
-                <Link href={`/chart/${encodeURIComponent(item.symbol)}?timeframe=${chartConfig?.symbol === item.symbol ? chartConfig.timeframe : "1m"}`} className="rounded border border-[var(--border)] px-2.5 py-1.5 text-[10px] text-slate-300 hover:text-white">Open full chart</Link>
+                <Link href={item.assetClass === "future"
+                  ? `/futures/${encodeURIComponent(futuresRootFromSymbol(item.symbol))}?contract=${encodeURIComponent(item.symbol)}`
+                  : `/chart/${encodeURIComponent(item.symbol)}?timeframe=${chartConfig?.symbol === item.symbol ? chartConfig.timeframe : "1m"}`}
+                  className="rounded border border-[var(--border)] px-2.5 py-1.5 text-[10px] text-slate-300 hover:text-white">{item.assetClass === "future" ? "Open futures" : "Open full chart"}</Link>
               </div>
               {quote && <div className="flex items-end gap-3 px-4 pt-4"><span className="font-mono text-2xl">{formatPrice(quote.last, item.symbol, item.assetClass)}</span><span className={cn("font-mono text-xs", quote.change >= 0 ? "text-emerald-400" : "text-rose-400")}>{quote.change >= 0 ? "+" : ""}{quote.change.toFixed(2)} ({quote.changePercent.toFixed(2)}%)</span></div>}
               <div className="flex-1">

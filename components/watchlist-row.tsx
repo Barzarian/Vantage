@@ -6,6 +6,7 @@ import { GripVertical, MoreHorizontal, X } from "lucide-react";
 import type { WatchlistItem } from "@/lib/watchlists/model";
 import { useQuote } from "@/lib/market-data/quote-store";
 import { formatPrice, type WatchlistColumn } from "@/lib/watchlists/preferences";
+import { futuresRootFromSymbol } from "@/lib/futures/contracts";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -117,7 +118,10 @@ function WatchlistRowComponent({
     switch (column) {
       case "symbol":
         return <span className="font-semibold text-slate-100">
-          {item.symbol}
+          <Link href={item.assetClass === "future"
+            ? `/futures/${encodeURIComponent(futuresRootFromSymbol(item.symbol))}?contract=${encodeURIComponent(item.symbol)}`
+            : `/chart/${encodeURIComponent(item.symbol)}`}
+            className="hover:text-emerald-300">{item.symbol}</Link>
           {snapshot?.stale && <span className="ml-1 text-[9px] text-amber-400">STALE</span>}
           {quote.dataType === "delayed" && <span className="ml-1 rounded bg-amber-400/10 px-1 text-[9px] text-amber-300">DELAYED</span>}
           {quote.dataType === "frozen" && <span className="ml-1 rounded bg-slate-500/20 px-1 text-[9px] text-slate-400">FROZEN</span>}
@@ -169,7 +173,10 @@ function WatchlistRowComponent({
         </button>
         {menuOpen && (
           <div className="absolute right-2 top-9 z-30 min-w-40 rounded border border-[var(--border)] bg-[#12161d] p-1 shadow-xl">
-            <Link href={`/chart/${encodeURIComponent(item.symbol)}`} className="block rounded px-2 py-1.5 text-left text-xs hover:bg-white/5">Open chart</Link>
+            <Link href={item.assetClass === "future"
+              ? `/futures/${encodeURIComponent(futuresRootFromSymbol(item.symbol))}?contract=${encodeURIComponent(item.symbol)}`
+              : `/chart/${encodeURIComponent(item.symbol)}`}
+              className="block rounded px-2 py-1.5 text-left text-xs hover:bg-white/5">{item.assetClass === "future" ? "Open futures" : "Open chart"}</Link>
             <button className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-white/5" onClick={() => {
               const note = window.prompt("Note for " + item.symbol, item.note);
               if (note !== null) onNote(note);
