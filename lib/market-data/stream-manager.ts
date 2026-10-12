@@ -1,7 +1,7 @@
 "use client";
 
-import { quoteSchema, type Bar, type Quote, type Tick } from "./schemas";
-import type { Timeframe } from "./provider";
+import { optionQuoteSchema, quoteSchema, type Bar, type OptionQuote, type Quote, type Tick } from "./schemas";
+import type { OptionTickListener, Timeframe } from "./provider";
 import { quoteStore } from "./quote-store";
 
 type TickListener = (tick: Tick) => void;
@@ -30,7 +30,9 @@ export class MarketStreamManager {
   constructor(private readonly staleAfterMs = 15_000) {}
 
   private readonly consumers = new Map<string, Set<symbol>>();
+  private readonly optionConsumers = new Map<string, Set<symbol>>();
   private readonly pending = new Map<string, Quote>();
+  private readonly pendingOptions = new Map<string, OptionQuote>();
   private readonly barListeners = new Map<string, Set<{ timeframe: Timeframe; listener: BarListener }>>();
   private readonly currentBars = new Map<string, Bar>();
   private readonly lastVolumes = new Map<string, number>();
@@ -92,6 +94,33 @@ export class MarketStreamManager {
     };
   }
 
+  subscribeOptions(occSymbols: string[], onTick?: OptionTickListener): () => void {
+    const uniqueSymbols = [...new Set(occSymbols.map((symbol) => symbol.trim().toUpperCase()))];
+    const token = Symbol("option-stream-consumer");
+    for (const occSymbol of uniqueSymbols) {
+      const consumers = this.optionConsumers.get(occSymbol) ?? new Set<symbol>();
+      consumers.add(token);
+      this.optionConsumers.set(occSymbol, consumers);
+    }
+    const callbacks = new Map<string, OptionTickListener>();
+    if (onTick) for (const occSymbol of uniqueSymbols) callbacks.set(occSymbol, onTick);
+    this.optionSubscriptions.set(token, callbacks);
+    this.ensureTimers();
+    this.scheduleReconcile();
+    return () => {
+      for (const occSymbol of uniqueSymbols) {
+        const consumers = this.optionConsumers.get(occSymbol);
+        consumers?.delete(token);
+        if (!consumers?.size) {
+          this.optionConsumers.delete(occSymbol);
+          this.pendingOptions.delete(occSymbol);
+        }
+      }
+      this.optionSubscriptions.delete(token);
+      this.scheduleReconcile();
+    };
+  }
+
   subscribeStatus(
     listener: (status: StreamStatus, event: "status" | "error") => void,
   ): () => void {
@@ -118,6 +147,7 @@ export class MarketStreamManager {
   }
 
   private readonly tickSubscriptions = new Map<symbol, Map<string, TickListener>>();
+  private readonly optionSubscriptions = new Map<symbol, Map<string, OptionTickListener>>();
 
   private ensureTimers(): void {
     this.flushTimer ??= setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
@@ -129,12 +159,13 @@ export class MarketStreamManager {
     this.reconcileTimer = setTimeout(() => {
       this.reconcileTimer = undefined;
       const symbols = [...this.consumers.keys()].sort();
-      const key = symbols.join(",");
+      const optionSymbols = [...this.optionConsumers.keys()].sort();
+      const key = `q:${symbols.join(",")}|o:${optionSymbols.join(",")}`;
       if (this.running && key === this.streamKey) return;
       this.streamKey = key;
       this.abortController?.abort();
       this.running = false;
-      if (symbols.length) void this.connect(symbols);
+      if (symbols.length || optionSymbols.length) void this.connect(symbols, optionSymbols);
       else {
         this.setState("disconnected");
         if (this.flushTimer) clearInterval(this.flushTimer);
@@ -142,6 +173,7 @@ export class MarketStreamManager {
         this.flushTimer = undefined;
         this.staleTimer = undefined;
         this.pending.clear();
+        this.pendingOptions.clear();
         this.lastVolumes.clear();
         this.lastPrices.clear();
         this.streamKey = "";
@@ -151,7 +183,7 @@ export class MarketStreamManager {
 
   private streamKey = "";
 
-  private async connect(symbols: string[]): Promise<void> {
+  private async connect(symbols: string[], optionSymbols: string[]): Promise<void> {
     const controller = new AbortController();
     this.abortController = controller;
     this.running = true;
@@ -159,6 +191,7 @@ export class MarketStreamManager {
     try {
       const params = new URLSearchParams();
       for (const symbol of symbols) params.append("symbol", symbol);
+      for (const occSymbol of optionSymbols) params.append("optionSymbol", occSymbol);
       const response = await fetch(`/api/stream?${params}`, {
         headers: { Accept: "text/event-stream" },
         cache: "no-store",
@@ -180,7 +213,9 @@ export class MarketStreamManager {
       const base = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** this.reconnectAttempt++);
       const wait = Math.round(base * (0.75 + Math.random() * 0.5));
       await new Promise((resolve) => setTimeout(resolve, wait));
-      if (this.consumers.size) void this.connect([...this.consumers.keys()].sort());
+      if (this.consumers.size || this.optionConsumers.size) {
+        void this.connect([...this.consumers.keys()].sort(), [...this.optionConsumers.keys()].sort());
+      }
     }
   }
 
@@ -224,6 +259,13 @@ export class MarketStreamManager {
       this.emitLiveBar(parsed.data);
       return;
     }
+    if (eventName === "optionTick") {
+      const parsed = optionQuoteSchema.safeParse(payload);
+      if (!parsed.success) return;
+      this.pendingOptions.set(parsed.data.occSymbol, parsed.data);
+      this.reconnectAttempt = 0;
+      return;
+    }
     if (eventName === "status" && isStreamStatus(payload)) {
       if (payload.state === "live") this.setState("live");
       else if (payload.state === "connecting" || payload.state === "reconnecting") this.setState("connecting");
@@ -238,13 +280,24 @@ export class MarketStreamManager {
   }
 
   private flush(): void {
-    if (!this.pending.size) return;
-    const changed = [...this.pending.values()];
-    this.pending.clear();
-    quoteStore.updateMany(changed);
-    for (const tick of changed) {
-      for (const callbackMap of this.tickSubscriptions.values()) {
-        callbackMap.get(tick.symbol)?.(tick);
+    if (this.pending.size) {
+      const changed = [...this.pending.values()];
+      this.pending.clear();
+      quoteStore.updateMany(changed);
+      for (const tick of changed) {
+        for (const callbackMap of this.tickSubscriptions.values()) {
+          callbackMap.get(tick.symbol)?.(tick);
+        }
+      }
+    }
+    if (this.pendingOptions.size) {
+      const changed = [...this.pendingOptions.values()];
+      this.pendingOptions.clear();
+      quoteStore.updateOptions(changed);
+      for (const tick of changed) {
+        for (const callbackMap of this.optionSubscriptions.values()) {
+          callbackMap.get(tick.occSymbol)?.(tick);
+        }
       }
     }
   }

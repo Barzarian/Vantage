@@ -2,7 +2,8 @@ import type {
   Bar,
   FuturesContract,
   InstrumentSearchResult,
-  OptionContract,
+  OptionChainItem,
+  OptionQuote,
   Quote,
   Tick,
 } from "./schemas";
@@ -12,6 +13,7 @@ export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w" | "1M";
 export type BarRange = { from: number; to: number; limit?: number };
 export type TickListener = (tick: Tick) => void;
 export type BarListener = (symbol: string, bar: AggregatedBar) => void;
+export type OptionTickListener = (tick: OptionQuote) => void;
 export type ProviderStreamStatus = {
   state?: "disconnected" | "connecting" | "reconnecting" | "live";
   marketDataType?: number;
@@ -23,7 +25,8 @@ export type ProviderStreamStatus = {
 export interface MarketDataProvider {
   getQuote(symbols: string[]): Promise<Quote[]>;
   getBars(symbol: string, timeframe: Timeframe, range: BarRange): Promise<Bar[]>;
-  getOptionChain(underlying: string, expiry?: string): Promise<OptionContract[]>;
+  getOptionExpiries(underlying: string): Promise<string[]>;
+  getOptionChain(underlying: string, expiry: string): Promise<OptionChainItem[]>;
   getFuturesCurve(root: string): Promise<FuturesContract[]>;
   subscribe(
     symbols: string[],
@@ -33,5 +36,6 @@ export interface MarketDataProvider {
     onStatus?: (status: ProviderStreamStatus, event: "status" | "error") => void,
     evictable?: boolean,
   ): () => void;
+  subscribeOptions(occSymbols: string[], onTick: OptionTickListener): () => void;
   searchSymbols?(query: string): Promise<InstrumentSearchResult[]>;
 }

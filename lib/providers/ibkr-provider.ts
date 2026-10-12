@@ -4,6 +4,7 @@ import type {
   BarRange,
   BarListener,
   MarketDataProvider,
+  OptionTickListener,
   ProviderStreamStatus,
   TickListener,
   Timeframe,
@@ -13,9 +14,9 @@ import {
   futuresContractSchema,
   quoteSchema,
   instrumentSearchResultSchema,
+  type OptionChainItem,
   type Bar,
   type FuturesContract,
-  type OptionContract,
   type InstrumentSearchResult,
   type Quote,
 } from "@/lib/market-data/schemas";
@@ -94,11 +95,29 @@ export class IbkrProvider implements MarketDataProvider {
     return z.array(barSchema).parse(await this.request(`/bars?${params.toString()}`));
   }
 
-  async getOptionChain(underlying: string, expiry?: string): Promise<OptionContract[]> {
+  async getOptionExpiries(underlying: string): Promise<string[]> {
     throw new IbkrBridgeError(
-      `IBKR options are not supported in this integration stage (${underlying}${expiry ? ` ${expiry}` : ""}).`,
+      `IBKR option expiries are not supported by the bridge yet (${underlying}).`,
       501,
-      "UNSUPPORTED",
+      "OPTIONS_UNSUPPORTED",
+    );
+  }
+
+  async getOptionChain(underlying: string, expiry: string): Promise<OptionChainItem[]> {
+    throw new IbkrBridgeError(
+      `IBKR option chains are not supported by the bridge yet (${underlying} ${expiry}).`,
+      501,
+      "OPTIONS_UNSUPPORTED",
+    );
+  }
+
+  subscribeOptions(occSymbols: string[], onTick: OptionTickListener): () => void {
+    void occSymbols;
+    void onTick;
+    throw new IbkrBridgeError(
+      "IBKR option streaming is not supported by the bridge yet.",
+      501,
+      "OPTIONS_UNSUPPORTED",
     );
   }
 

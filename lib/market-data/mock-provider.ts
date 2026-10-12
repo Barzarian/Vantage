@@ -1,18 +1,24 @@
 import {
   barSchema,
   futuresContractSchema,
+  optionChainItemSchema,
   optionContractSchema,
+  optionQuoteSchema,
   quoteSchema,
   type Bar,
   type FuturesContract,
   type InstrumentSearchResult,
-  type OptionContract,
+  type OptionChainItem,
   type Quote,
   type Tick,
 } from "./schemas";
 import type { BarRange, MarketDataProvider, TickListener, Timeframe } from "./provider";
 import type { BarListener } from "./provider";
 import { BarAggregator } from "@/services/ibkr-bridge/src/bar-aggregator";
+import { calculateBlackScholes } from "@/lib/greeks/black-scholes";
+import { optionExpiryTimestamp } from "@/lib/greeks/expiry";
+import { formatOccSymbol, parseOccSymbol } from "@/lib/greeks/occ";
+import type { OptionTickListener } from "./provider";
 
 const SEEDS: Record<string, { name: string; type: Quote["type"]; price: number }> = {
   SPX: { name: "S&P 500", type: "index", price: 5824.5 },
@@ -31,6 +37,7 @@ const SEEDS: Record<string, { name: string; type: Quote["type"]; price: number }
   TSLA: { name: "Tesla, Inc.", type: "stock", price: 352.56 },
   AMZN: { name: "Amazon.com, Inc.", type: "stock", price: 221.48 },
   META: { name: "Meta Platforms, Inc.", type: "stock", price: 596.12 },
+  SPY: { name: "SPDR S&P 500 ETF Trust", type: "stock", price: 573.42 },
   "AAPL 250117C00230000": { name: "AAPL Jan 230 Call", type: "option", price: 8.45 },
 };
 const BASES: Record<string, number> = Object.fromEntries(
@@ -91,6 +98,7 @@ function makeQuote(symbol: string, previous?: number, previousVolume?: number): 
 export class MockMarketDataProvider implements MarketDataProvider {
   private readonly prices = new Map<string, number>();
   private readonly volumes = new Map<string, number>();
+  private readonly optionVolumes = new Map<string, number>();
 
   async getQuote(symbols: string[]): Promise<Quote[]> {
     return symbols.map((symbol) => {
@@ -144,33 +152,145 @@ export class MockMarketDataProvider implements MarketDataProvider {
       .filter((bar) => bar.time >= range.from && bar.time <= range.to);
   }
 
-  async getOptionChain(underlying: string, expiry?: string): Promise<OptionContract[]> {
-    const rootPrice = priceFor(underlying);
-    const expiration = expiry ?? new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-    const center = Math.round(rootPrice / 5) * 5;
-    const contracts: OptionContract[] = [];
-    for (let offset = -10; offset <= 10; offset += 1) {
-      for (const side of ["call", "put"] as const) {
-        const strike = center + offset * 5;
-        const intrinsic = side === "call" ? Math.max(rootPrice - strike, 0) : Math.max(strike - rootPrice, 0);
-        const timeValue = Math.max(0.2, rootPrice * 0.018 * Math.exp(-Math.abs(offset) * 0.12));
-        contracts.push(
-          optionContractSchema.parse({
-            symbol: `${underlying}${expiration.replaceAll("-", "").slice(2)}${side === "call" ? "C" : "P"}${String(Math.round(strike * 1000)).padStart(8, "0")}`,
-            expiry: expiration,
-            strike,
-            side,
-            bid: intrinsic + timeValue * 0.96,
-            ask: intrinsic + timeValue * 1.04,
-            last: intrinsic + timeValue,
-            volume: Math.floor(Math.random() * 5000),
-            openInterest: Math.floor(500 + Math.random() * 20000),
-            impliedVolatility: 0.18 + Math.abs(offset) * 0.009 + Math.random() * 0.025,
-          }),
-        );
+  async getOptionExpiries(underlying: string): Promise<string[]> {
+    const root = underlying.trim().toUpperCase();
+    if (!SEEDS[root] || SEEDS[root]!.type === "future") {
+      throw new RangeError(`Options are not available for ${root || "the requested underlying"}.`);
+    }
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const expiries = new Set<string>();
+    for (let week = 0; week <= 12; week += 1) {
+      const friday = new Date(today);
+      friday.setUTCDate(today.getUTCDate() + ((5 - today.getUTCDay() + 7) % 7 || 7) + week * 7);
+      expiries.add(friday.toISOString().slice(0, 10));
+    }
+    for (let month = 0; month <= 5; month += 1) {
+      const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + month, 1));
+      const thirdFriday = new Date(first);
+      thirdFriday.setUTCDate(1 + ((5 - first.getUTCDay() + 7) % 7) + 14);
+      if (thirdFriday > today) expiries.add(thirdFriday.toISOString().slice(0, 10));
+    }
+    return [...expiries].sort();
+  }
+
+  async getOptionChain(underlying: string, expiry: string): Promise<OptionChainItem[]> {
+    const root = underlying.trim().toUpperCase();
+    if (!(await this.getOptionExpiries(root)).includes(expiry)) {
+      throw new RangeError(`Unsupported option expiry ${expiry} for ${root}.`);
+    }
+    const spot = this.prices.get(root) ?? priceFor(root);
+    const rootStep = spot >= 400 ? 10 : spot >= 100 ? 5 : spot >= 20 ? 1 : 0.5;
+    const center = Math.round(spot / rootStep) * rootStep;
+    const startOfToday = new Date();
+    startOfToday.setUTCHours(0, 0, 0, 0);
+    const expiryInstant = optionExpiryTimestamp(expiry) * 1000;
+    const timeToExpiry = Math.max(1 / 365, (expiryInstant - startOfToday.getTime()) / (365 * 86400000));
+    const riskFreeRate = 0.045;
+    const result: OptionChainItem[] = [];
+    for (let offset = -24; offset <= 24; offset += 1) {
+      const strike = Number((center + offset * rootStep).toFixed(3));
+      if (strike <= 0) continue;
+      for (const type of ["call", "put"] as const) {
+        const contract = {
+          underlying: root,
+          expiry,
+          strike,
+          type,
+          multiplier: 100 as const,
+        };
+        const occSymbol = formatOccSymbol(contract);
+        const moneyness = Math.abs(Math.log(strike / spot));
+        const iv = 0.17 + moneyness * 0.85 + 0.015 * Math.sqrt(timeToExpiry) +
+          stableFraction(`${root}:${expiry}:${strike}:${type}`) * 0.012;
+        const model = calculateBlackScholes({
+          type,
+          spot,
+          strike,
+          timeToExpiry,
+          riskFreeRate,
+          volatility: iv,
+          dividendYield: root === "SPY" ? 0.012 : 0,
+        });
+        const width = Math.max(0.01, model.price * (0.012 + Math.min(0.08, moneyness * 0.12)));
+        const volume = stableInteger(`${occSymbol}:volume`, 10, 900);
+        const openInterest = stableInteger(`${occSymbol}:oi`, 100, 25_000);
+        const quote = optionQuoteSchema.parse({
+          occSymbol,
+          underlying: root,
+          bid: Math.max(0, model.price - width / 2),
+          ask: model.price + width / 2,
+          last: model.price,
+          mark: model.price,
+          volume,
+          openInterest,
+          impliedVolatility: iv,
+          delta: model.delta,
+          gamma: model.gamma,
+          theta: model.theta,
+          vega: model.vega,
+          greeksSource: "computed",
+          updatedAt: new Date().toISOString(),
+        });
+        result.push(optionChainItemSchema.parse({
+          contract: { occSymbol, ...contract },
+          quote,
+        }));
       }
     }
-    return contracts;
+    return result.sort((left, right) =>
+      left.contract.strike - right.contract.strike ||
+      (left.contract.type === right.contract.type ? 0 : left.contract.type === "call" ? -1 : 1),
+    );
+  }
+
+  subscribeOptions(occSymbols: string[], onTick: OptionTickListener): () => void {
+    const contracts = [...new Set(occSymbols)].map((symbol) => {
+      const parsed = optionContractSchema.parse({
+        ...parseOccSymbol(symbol),
+        multiplier: 100,
+      });
+      return parsed;
+    });
+    const underlyings = [...new Set(contracts.map((contract) => contract.underlying))];
+    return this.subscribe(underlyings, (tick) => {
+      for (const contract of contracts.filter(({ underlying }) => underlying === tick.symbol)) {
+        const expiryInstant = optionExpiryTimestamp(contract.expiry) * 1000;
+        const timeToExpiry = Math.max(1 / 365, (expiryInstant - Date.now()) / (365 * 86400000));
+        const impliedVolatility = 0.17 + Math.abs(Math.log(contract.strike / tick.last)) * 0.85 +
+          0.015 * Math.sqrt(timeToExpiry) +
+          stableFraction(`${contract.occSymbol}:iv`) * 0.012;
+        const model = calculateBlackScholes({
+          type: contract.type,
+          spot: tick.last,
+          strike: contract.strike,
+          timeToExpiry,
+          riskFreeRate: 0.045,
+          volatility: impliedVolatility,
+          dividendYield: contract.underlying === "SPY" ? 0.012 : 0,
+        });
+        const spread = Math.max(0.01, model.price * 0.02);
+        const volume = (this.optionVolumes.get(contract.occSymbol) ?? stableInteger(`${contract.occSymbol}:volume`, 10, 900)) + 1;
+        this.optionVolumes.set(contract.occSymbol, volume);
+        onTick(optionQuoteSchema.parse({
+          occSymbol: contract.occSymbol,
+          underlying: contract.underlying,
+          bid: Math.max(0, model.price - spread / 2),
+          ask: model.price + spread / 2,
+          last: model.price,
+          mark: model.price,
+          volume,
+          openInterest: stableInteger(`${contract.occSymbol}:oi`, 100, 25_000),
+          impliedVolatility,
+          delta: model.delta,
+          gamma: model.gamma,
+          theta: model.theta,
+          vega: model.vega,
+          greeksSource: "computed",
+          updatedAt: tick.updatedAt,
+        }));
+      }
+    });
   }
 
   async getFuturesCurve(root: string): Promise<FuturesContract[]> {
@@ -206,7 +326,25 @@ export class MockMarketDataProvider implements MarketDataProvider {
           onBar(symbol, bar);
         }
       }
+
     }, 900);
     return () => clearInterval(timer);
   }
+}
+
+function stableHash(value: string): number {
+  let hash = 2_166_136_261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
+function stableFraction(value: string): number {
+  return stableHash(value) / 0xffff_ffff;
+}
+
+function stableInteger(value: string, min: number, max: number): number {
+  return min + (stableHash(value) % (max - min + 1));
 }

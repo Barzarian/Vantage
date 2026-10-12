@@ -36,3 +36,11 @@ export const savedWatchlistPreferences = pgTable("saved_watchlist_preferences", 
   preferences: text("preferences").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const savedStrategies = pgTable("saved_strategies", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  name: text("name").notNull(),
+  legs: text("legs").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

@@ -38,22 +38,41 @@ export const barSchema = z.object({
 export type Bar = z.infer<typeof barSchema>;
 
 export const optionContractSchema = z.object({
-  symbol: z.string(),
-  expiry: z.string(),
-  strike: z.number().positive(),
-  side: z.enum(["call", "put"]),
-  bid: z.number().nonnegative(),
-  ask: z.number().nonnegative(),
-  last: z.number().nonnegative(),
-  volume: z.number().int().nonnegative(),
-  openInterest: z.number().int().nonnegative(),
-  impliedVolatility: z.number().nonnegative(),
-  delta: z.number().finite().optional(),
-  gamma: z.number().nonnegative().optional(),
-  theta: z.number().finite().optional(),
-  vega: z.number().nonnegative().optional(),
+  occSymbol: z.string().min(8).max(32),
+  underlying: z.string().min(1).max(16),
+  expiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  strike: z.number().positive().finite(),
+  type: z.enum(["call", "put"]),
+  multiplier: z.literal(100).default(100),
 });
 export type OptionContract = z.infer<typeof optionContractSchema>;
+
+export const optionQuoteSchema = z.object({
+  occSymbol: z.string().min(8).max(32),
+  underlying: z.string().min(1).max(16),
+  bid: z.number().nonnegative().finite().nullable(),
+  ask: z.number().nonnegative().finite().nullable(),
+  last: z.number().nonnegative().finite().nullable(),
+  mark: z.number().nonnegative().finite().nullable(),
+  volume: z.number().int().nonnegative(),
+  openInterest: z.number().int().nonnegative(),
+  impliedVolatility: z.number().nonnegative().finite().nullable(),
+  delta: z.number().finite().nullable().optional(),
+  gamma: z.number().finite().nullable().optional(),
+  theta: z.number().finite().nullable().optional(),
+  vega: z.number().finite().nullable().optional(),
+  greeksSource: z.enum(["provider", "computed"]),
+  updatedAt: z.string().datetime(),
+});
+export type OptionQuote = z.infer<typeof optionQuoteSchema>;
+
+export const optionChainItemSchema = z.object({
+  contract: optionContractSchema,
+  quote: optionQuoteSchema,
+});
+export type OptionChainItem = z.infer<typeof optionChainItemSchema>;
+
+export const optionExpiriesSchema = z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/));
 
 export const futuresContractSchema = z.object({
   symbol: z.string(),

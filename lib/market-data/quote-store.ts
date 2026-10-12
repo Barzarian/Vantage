@@ -1,14 +1,17 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { quoteSchema, type Quote } from "./schemas";
+import { optionQuoteSchema, quoteSchema, type OptionQuote, type Quote } from "./schemas";
 
 export type QuoteConnectionState = "connecting" | "live" | "stale" | "disconnected";
 export type QuoteSnapshot = { quote: Quote; stale: boolean; history: number[] };
+export type OptionQuoteSnapshot = { quote: OptionQuote; stale: boolean };
 
 export class QuoteStore {
   private readonly snapshots = new Map<string, QuoteSnapshot>();
   private readonly quoteListeners = new Map<string, Set<() => void>>();
+  private readonly optionSnapshots = new Map<string, OptionQuoteSnapshot>();
+  private readonly optionListeners = new Map<string, Set<() => void>>();
   private readonly statusListeners = new Set<() => void>();
   private connectionState: QuoteConnectionState = "disconnected";
   private lastUpdate: string | null = null;
@@ -25,6 +28,10 @@ export class QuoteStore {
     return this.statusSnapshot;
   }
 
+  getOption(occSymbol: string): OptionQuoteSnapshot | undefined {
+    return this.optionSnapshots.get(occSymbol);
+  }
+
   subscribe(symbol: string, listener: () => void): () => void {
     const listeners = this.quoteListeners.get(symbol) ?? new Set();
     listeners.add(listener);
@@ -38,6 +45,16 @@ export class QuoteStore {
   subscribeStatus(listener: () => void): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
+  }
+
+  subscribeOption(occSymbol: string, listener: () => void): () => void {
+    const listeners = this.optionListeners.get(occSymbol) ?? new Set();
+    listeners.add(listener);
+    this.optionListeners.set(occSymbol, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.optionListeners.delete(occSymbol);
+    };
   }
 
   update(input: Quote): void {
@@ -65,6 +82,18 @@ export class QuoteStore {
     }
   }
 
+  updateOptions(quotes: OptionQuote[]): void {
+    const changed = new Set<string>();
+    for (const input of quotes) {
+      const quote = optionQuoteSchema.parse(input);
+      this.optionSnapshots.set(quote.occSymbol, { quote, stale: false });
+      changed.add(quote.occSymbol);
+    }
+    for (const occSymbol of changed) {
+      for (const listener of this.optionListeners.get(occSymbol) ?? []) listener();
+    }
+  }
+
   setConnectionState(state: QuoteConnectionState): void {
     if (this.connectionState === state) return;
     this.connectionState = state;
@@ -83,8 +112,18 @@ export class QuoteStore {
         changed = true;
       }
     }
+    for (const [occSymbol, snapshot] of this.optionSnapshots) {
+      const stale = marketOpenFor("stock", now) && now - Date.parse(snapshot.quote.updatedAt) > staleAfterMs;
+      if (snapshot.stale !== stale) {
+        this.optionSnapshots.set(occSymbol, { ...snapshot, stale });
+        for (const listener of this.optionListeners.get(occSymbol) ?? []) listener();
+        changed = true;
+      }
+    }
     const hasRecentTick = [...this.snapshots.values()].some(
       ({ quote }) => marketOpenFor(quote.type, now) && now - Date.parse(quote.updatedAt) <= staleAfterMs,
+    ) || [...this.optionSnapshots.values()].some(
+      ({ quote }) => marketOpenFor("stock", now) && now - Date.parse(quote.updatedAt) <= staleAfterMs,
     );
     if (this.connectionState === "live" && !hasRecentTick) this.setConnectionState("stale");
     if (changed) this.notifyStatus();
@@ -147,5 +186,13 @@ export function useQuoteConnection(): ReturnType<QuoteStore["getStatus"]> {
     (listener) => quoteStore.subscribeStatus(listener),
     () => quoteStore.getStatus(),
     () => ({ state: "disconnected", lastUpdate: null }),
+  );
+}
+
+export function useOptionQuote(occSymbol: string): OptionQuoteSnapshot | undefined {
+  return useSyncExternalStore(
+    (listener) => quoteStore.subscribeOption(occSymbol, listener),
+    () => quoteStore.getOption(occSymbol),
+    () => undefined,
   );
 }

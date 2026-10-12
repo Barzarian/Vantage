@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { calculateBlackScholes } from "../../lib/greeks/black-scholes";
+import { optionExpiryTimestamp, timeToOptionExpiry } from "../../lib/greeks/expiry";
+import { solveImpliedVolatility } from "../../lib/greeks/implied-volatility";
 
 describe("calculateBlackScholes", () => {
   const atmCall = {
@@ -17,8 +19,8 @@ describe("calculateBlackScholes", () => {
     expect(greeks.price).toBeCloseTo(10.4506, 3);
     expect(greeks.delta).toBeCloseTo(0.6368, 3);
     expect(greeks.gamma).toBeCloseTo(0.01876, 4);
-    expect(greeks.theta).toBeCloseTo(-6.414, 2);
-    expect(greeks.vega).toBeCloseTo(37.524, 2);
+    expect(greeks.theta).toBeCloseTo(-6.414 / 365, 5);
+    expect(greeks.vega).toBeCloseTo(0.37524, 3);
     expect(greeks.rho).toBeCloseTo(53.232, 2);
   });
 
@@ -36,5 +38,37 @@ describe("calculateBlackScholes", () => {
     expect(withDividend.delta).toBeLessThan(calculateBlackScholes(atmCall).delta);
     expect(() => calculateBlackScholes({ ...atmCall, volatility: 0 })).toThrow(RangeError);
     expect(() => calculateBlackScholes({ ...atmCall, spot: Number.NaN })).toThrow(RangeError);
+  });
+
+  it("solves implied volatility with Newton and respects no-arbitrage bounds", () => {
+    const marketPrice = calculateBlackScholes({ ...atmCall, dividendYield: 0.02 }).price;
+    const result = solveImpliedVolatility({
+      type: "call",
+      spot: 100,
+      strike: 100,
+      timeToExpiry: 1,
+      riskFreeRate: 0.05,
+      dividendYield: 0.02,
+      marketPrice,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.volatility).toBeCloseTo(0.2, 6);
+    expect(solveImpliedVolatility({
+      type: "call",
+      spot: 100,
+      strike: 100,
+      timeToExpiry: 1,
+      riskFreeRate: 0.05,
+      marketPrice: 101,
+    })).toEqual({ ok: false, reason: "no-solution" });
+  });
+
+  it("uses 16:00 New York expiry across daylight-saving time and handles expiry now", () => {
+    expect(new Date(optionExpiryTimestamp("2026-03-06") * 1000).toISOString())
+      .toBe("2026-03-06T21:00:00.000Z");
+    expect(new Date(optionExpiryTimestamp("2026-03-13") * 1000).toISOString())
+      .toBe("2026-03-13T20:00:00.000Z");
+    expect(timeToOptionExpiry("2026-03-13", optionExpiryTimestamp("2026-03-13") * 1000)).toBe(0);
+    expect(calculateBlackScholes({ ...atmCall, timeToExpiry: 0 }).price).toBe(0);
   });
 });

@@ -188,6 +188,8 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
               <Link key={section} href="/watchlists" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
             ) : section === "Charts" ? (
               <Link key={section} href={`/chart/${encodeURIComponent(watchSymbols[0] ?? "AAPL")}`} className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
+            ) : section === "Options" ? (
+              <Link key={section} href="/options/SPY" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
             ) : (
               <button key={section} onClick={() => setActiveSection(section)} className={cn("h-full border-b-2 px-3 text-xs transition-colors", activeSection === section ? "border-emerald-400 text-white" : "border-transparent text-slate-500 hover:text-slate-200")}>
                 {section}

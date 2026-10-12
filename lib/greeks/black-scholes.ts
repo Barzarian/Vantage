@@ -29,8 +29,8 @@ function validateInput(input: BlackScholesInput) {
   if (![spot, strike, timeToExpiry, riskFreeRate, volatility, dividendYield].every(Number.isFinite)) {
     throw new RangeError("Black-Scholes inputs must be finite numbers.");
   }
-  if (spot <= 0 || strike <= 0 || timeToExpiry <= 0 || volatility <= 0) {
-    throw new RangeError("Spot, strike, time to expiry, and volatility must be greater than zero.");
+  if (spot <= 0 || strike <= 0 || timeToExpiry < 0 || volatility <= 0) {
+    throw new RangeError("Spot and strike must be positive, time to expiry nonnegative, and volatility positive.");
   }
 }
 
@@ -62,6 +62,18 @@ export function calculateBlackScholes(input: BlackScholesInput): OptionGreeks {
     volatility,
     dividendYield = 0,
   } = input;
+  if (timeToExpiry < 1e-10) {
+    const inTheMoney = spot === strike ? 0.5 : spot > strike ? 1 : 0;
+    const call = type === "call";
+    return {
+      price: call ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0),
+      delta: call ? inTheMoney : inTheMoney - 1,
+      gamma: 0,
+      theta: 0,
+      vega: 0,
+      rho: 0,
+    };
+  }
   const rootTime = Math.sqrt(timeToExpiry);
   const discountedSpot = spot * Math.exp(-dividendYield * timeToExpiry);
   const discountedStrike = strike * Math.exp(-riskFreeRate * timeToExpiry);
@@ -80,14 +92,16 @@ export function calculateBlackScholes(input: BlackScholesInput): OptionGreeks {
     : Math.exp(-dividendYield * timeToExpiry) * (normalCdf(d1) - 1);
   const gamma =
     (Math.exp(-dividendYield * timeToExpiry) * density) / (spot * volatility * rootTime);
-  const theta =
+  const thetaPerYear =
     (-(spot * Math.exp(-dividendYield * timeToExpiry) * density * volatility) / (2 * rootTime) +
       (call
         ? -riskFreeRate * strike * Math.exp(-riskFreeRate * timeToExpiry) * normalCdf(d2) +
           dividendYield * spot * Math.exp(-dividendYield * timeToExpiry) * normalCdf(d1)
         : riskFreeRate * strike * Math.exp(-riskFreeRate * timeToExpiry) * normalCdf(-d2) -
           dividendYield * spot * Math.exp(-dividendYield * timeToExpiry) * normalCdf(-d1)));
-  const vega = spot * Math.exp(-dividendYield * timeToExpiry) * density * rootTime;
+  const vegaPerUnitVolatility = spot * Math.exp(-dividendYield * timeToExpiry) * density * rootTime;
+  const theta = thetaPerYear / 365;
+  const vega = vegaPerUnitVolatility / 100;
   const rho = call
     ? strike * timeToExpiry * Math.exp(-riskFreeRate * timeToExpiry) * normalCdf(d2)
     : -strike * timeToExpiry * Math.exp(-riskFreeRate * timeToExpiry) * normalCdf(-d2);
