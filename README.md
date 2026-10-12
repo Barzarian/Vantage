@@ -99,7 +99,7 @@ The stream manager owns a single browser SSE connection for each active symbol s
 
 To add an indicator, implement its pure calculation in `lib/indicators`, add its validated kind/configuration to `lib/watchlists/preferences.ts`, then connect it to the chart's indicator selector and rendering path in `components/price-chart-panel.tsx`. Keep calculations independent of React and add known-value unit tests.
 
-Known watchlist/chart limitations: this is still single-user-first (`local-user` is a placeholder; Auth.js is not wired), so database records are not isolated by authenticated identity. The no-Postgres fallback is process-local and not durable across server restarts. Chart range/history availability depends on the selected provider and is subject to IBKR pacing; lazy history and live bars have not been validated against all exchange sessions, especially overnight futures. Chart crosshair/time synchronization is approximate across dissimilar trading calendars. The desktop split is simplified on small screens, and symbol search currently uses the provider's available directory rather than exchange-wide discovery in mock mode.
+Known watchlist/chart limitations: this is still single-user-first (`local-user` is a development placeholder; Auth.js is not wired), and watchlists plus several saved preferences still use that placeholder. Positions and alerts fail closed in production until the identity resolver described below is connected. The no-Postgres fallback is process-local and not durable across server restarts. Chart range/history availability depends on the selected provider and is subject to IBKR pacing; lazy history and live bars have not been validated against all exchange sessions, especially overnight futures. Chart crosshair/time synchronization is approximate across dissimilar trading calendars. The desktop split is simplified on small screens, and symbol search currently uses the provider's available directory rather than exchange-wide discovery in mock mode.
 
 ### Options
 
@@ -118,6 +118,22 @@ Month codes, one-/two-digit year resolution, front/next selection, ET session/tr
 Futures ticks reuse the symbol-keyed `QuoteStore` and shared ref-counted SSE stream. Overview rows and detail contracts subscribe by symbol, so a tick notifies only listeners for that contract. Search returns a front contract as a watchlist item; futures watchlist links open the matching root and contract.
 
 Known futures limitations: mock prices and historical bars are simulated; the mock curve reflects seeded carry shapes and illustrative volume/open-interest migration, not exchange quotes. IBKR's curve response does not include settlement, volume, or open interest for every contract, and deep historical continuous series remain pacing- and listing-dependent. Roll boundaries use estimated dates; exchange-specific last-trade/first-notice calendars are not comprehensive. Holiday data covers selected full-day U.S. closures only and does not model early closes or each exchange's special schedules. Previous-day/week curve snapshots are not retained. Margin estimates and position-notional calculations are informational, not risk limits.
+
+### Positions, P&L, and alerts
+
+`/positions` derives holdings and realized P&L from the transaction ledger. Apply `db/migrations/0004_positions.sql` and `db/migrations/0005_alerts.sql` with `pnpm db:migrate` when Postgres is configured. Without Postgres the dashboard uses process-local memory; this mode is for development and does not share data with the separate alert worker.
+
+`/alerts` manages persistent alert rules and event history; `/settings` configures in-app, email, Web Push, and signed webhook delivery. Start the separate Node evaluator alongside Next.js:
+
+```sh
+pnpm alerts:worker
+```
+
+The worker requires `DATABASE_URL`, the migrations above, and the same provider configuration as the Next.js process. Run one worker instance for a deployment; evaluation state is locked and updated transactionally, events have per-alert idempotency keys, and failed channel deliveries are retried. The worker subscribes only to active alert symbols through `MarketDataProvider`. Indicators reuse `lib/indicators`; futures calculations reuse the contract/spec tables. Market-hours gating currently uses a weekday U.S. regular-session approximation; it is not an exchange calendar.
+
+Set `ALERTS_ENCRYPTION_KEY` to a base64-encoded 32-byte key before saving email, webhook, or push-subscription secrets (`openssl rand -base64 32` creates one). Webhook destinations must use HTTPS and resolve to public addresses; requests do not follow redirects and include `X-Vantage-Timestamp`, `X-Vantage-Signature` (`sha256=<hex HMAC-SHA256 of timestamp.body>`), and `X-Vantage-Event-Id`. Email uses Resend by default; an application can register a custom `AlertEmailAdapter`. To enable email, configure `RESEND_API_KEY` and `ALERTS_EMAIL_FROM`. To enable Web Push, run `pnpm alerts:vapid` and configure `ALERTS_VAPID_PUBLIC_KEY`, `ALERTS_VAPID_PRIVATE_KEY`, and `ALERTS_VAPID_SUBJECT`.
+
+The project still has no Auth.js provider/session resolver. In development, APIs use the `local-user` demo identity. In production, positions and alert APIs fail closed with HTTP 401 until `lib/auth/user.ts` is connected to the deployment's Auth.js session; alert records and positions services are user-scoped once that identity is supplied. Do not expose the development fallback as production authentication.
 
 ## Interactive Brokers setup
 
@@ -147,8 +163,16 @@ IBKR's single-session rule can disconnect the API if the same username logs in f
 
 Real-time quotes require the relevant IBKR market-data subscriptions and a funded account. `IB_MARKET_DATA_TYPE=3` requests delayed data when available; delayed availability and delay length vary by instrument and entitlement. IBKR market data is for personal, non-professional use under the account data agreement. Do not redistribute it publicly.
 
+### Positions, P&L, and alerts
+
+`/positions` folds the account's validated trade, split, dividend, and option-outcome transactions into positions; it does not store editable position quantities. FIFO is the default lot method, with LIFO and average cost available in account settings. Monetary accounting rounds transaction-level totals to integer cents. OCC option parsing and futures multipliers/tick values reuse `lib/greeks/occ.ts` and `data/futures-specs.json`. Quotes and option ticks use the shared SSE route and symbol-specific `QuoteStore` selectors. Missing marks stay unavailable, and cross-currency totals use per-account FX rates marked approximate.
+
+Transaction CRUD is available under `/api/positions`; edits and deletions are retained in `transaction_audit`. CSV import previews row errors and duplicate transaction hashes before writes; CSV export is available from the page. Daily snapshots are captured by `POST /api/positions/snapshot`; schedule that endpoint after the market close to maintain the `/positions` performance value curve. It skips a snapshot when any open position lacks a mark. `/alerts` displays position expiry, futures roll, concentration, stale/missing mark, and disconnected-stream warnings. These are in-app warnings, not push/email alerts.
+
+Apply migrations with `pnpm db:migrate` when Postgres is configured. Without Postgres, the position ledger, snapshots, and alert records use process-local memory and are not durable across restarts. Development uses the `local-user` demo identity; production position and alert APIs return HTTP 401 until the Auth.js session resolver is connected.
+
 ## Current stage and known limitations
 
-The overview supports mock data by default and a private IBKR bridge for stock, index, and futures quotes/bars. Black-Scholes Greeks, implied volatility, strategy payoff, futures roll/curve/tick calculations, technical indicators, and position P&L calculations have unit tests; options and futures demonstrations run with the mock provider.
+The overview supports mock data by default and a private IBKR bridge for stock, index, and futures quotes/bars. Black-Scholes Greeks, implied volatility, strategy payoff, futures roll/curve/tick calculations, technical indicators, and transaction-sourced position P&L calculations have unit tests; options and futures demonstrations run with the mock provider.
 
-Limitations: IBKR options and order placement are intentionally not implemented. Futures specs, sessions, and holidays are reference estimates; live continuous history can be incomplete and is subject to IBKR pacing. IBKR historical response caching is range-keyed, not a full local bar warehouse; very large history loads are slow by design due to pacing. Reconnect gap recovery applies to active live-bar subscriptions. No user authentication, portfolio persistence, alert delivery, or market-data licensing enforcement is included. Saved strategies and watchlists use a local-user placeholder until authentication is wired. The mock feed and illustrative market-status label are not exchange data. The current UI is desktop-first. Do not use this prototype to make trading decisions.
+Limitations: IBKR options and order placement are intentionally not implemented. Futures specs, sessions, and holidays are reference estimates; live continuous history can be incomplete and is subject to IBKR pacing. IBKR historical response caching is range-keyed, not a full local bar warehouse; very large history loads are slow by design due to pacing. Reconnect gap recovery applies to active live-bar subscriptions. Auth.js still needs a deployment-specific provider and session resolver; the existing watchlists, strategies, and preferences retain their local-user fallback. Alert evaluation and email, Web Push, and signed webhook delivery require Postgres, a separately deployed `pnpm alerts:worker`, and the corresponding channel configuration. FX rates and margin are estimates, and the mock feed and illustrative market-status label are not exchange data. The current UI is desktop-first. Do not use this prototype to make trading decisions.

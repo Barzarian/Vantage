@@ -192,6 +192,10 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
               <Link key={section} href="/options/SPY" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
             ) : section === "Futures" ? (
               <Link key={section} href="/futures" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
+            ) : section === "Positions" ? (
+              <Link key={section} href="/positions" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
+            ) : section === "Alerts" ? (
+              <Link key={section} href="/alerts" className="flex h-full items-center border-b-2 border-transparent px-3 text-xs text-slate-500 transition-colors hover:text-slate-200">{section}</Link>
             ) : (
               <button key={section} onClick={() => setActiveSection(section)} className={cn("h-full border-b-2 px-3 text-xs transition-colors", activeSection === section ? "border-emerald-400 text-white" : "border-transparent text-slate-500 hover:text-slate-200")}>
                 {section}
@@ -203,8 +207,8 @@ export function MarketTerminal({ initialQuotes, initialStrip }: MarketTerminalPr
           <button onClick={() => setSearchOpen(true)} className="hidden h-8 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--panel)] px-2.5 text-xs text-slate-500 sm:flex">
             <Search size={13} /> Search symbols <span className="ml-3 flex items-center gap-0.5 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px]"><Command size={10} /> K</span>
           </button>
-          <button aria-label="Alerts" className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-[var(--panel-raised)]"><Bell size={16} /></button>
-          <button aria-label="Settings" className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-[var(--panel-raised)]"><Settings2 size={16} /></button>
+          <Link href="/alerts" aria-label="Alerts" className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-[var(--panel-raised)]"><Bell size={16} /></Link>
+          <Link href="/settings" aria-label="Settings" className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-[var(--panel-raised)]"><Settings2 size={16} /></Link>
           <ThemeToggle />
           <div className="ml-1 hidden items-center gap-2 border-l border-[var(--border)] pl-3 sm:flex">
             <span className="grid size-7 place-items-center rounded-full bg-slate-700 text-[10px] font-medium text-slate-200">JD</span>

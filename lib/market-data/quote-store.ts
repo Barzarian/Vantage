@@ -4,8 +4,19 @@ import { useSyncExternalStore } from "react";
 import { futuresQuoteSchema, optionQuoteSchema, quoteSchema, type FuturesQuote, type OptionQuote, type Quote } from "./schemas";
 
 export type QuoteConnectionState = "connecting" | "live" | "stale" | "disconnected";
-export type QuoteSnapshot = { quote: Quote; stale: boolean; history: number[] };
-export type OptionQuoteSnapshot = { quote: OptionQuote; stale: boolean };
+export type QuoteSnapshot = {
+  quote: Quote;
+  stale: boolean;
+  history: number[];
+  revision: number;
+  flash: "up" | "down" | null;
+};
+export type OptionQuoteSnapshot = {
+  quote: OptionQuote;
+  stale: boolean;
+  revision: number;
+  flash: "up" | "down" | null;
+};
 export type FuturesQuoteSnapshot = { quote: FuturesQuote; stale: boolean };
 const disconnectedStatus = { state: "disconnected" as const, lastUpdate: null };
 
@@ -79,6 +90,10 @@ export class QuoteStore {
   update(input: Quote): void {
     const quote = quoteSchema.parse(input);
     this.saveQuote(quote);
+    this.notifyQuote(quote.symbol);
+    if (quote.type === "future") {
+      for (const listener of this.futuresListeners.get(quote.symbol.toUpperCase()) ?? []) listener();
+    }
     this.lastUpdate = quote.updatedAt;
     this.refreshStatusSnapshot();
     this.refreshConnectionState();
@@ -123,7 +138,17 @@ export class QuoteStore {
     const changed = new Set<string>();
     for (const input of quotes) {
       const quote = optionQuoteSchema.parse(input);
-      this.optionSnapshots.set(quote.occSymbol, { quote, stale: false });
+      const previous = this.optionSnapshots.get(quote.occSymbol);
+      const previousPrice = previous?.quote.mark ?? previous?.quote.last;
+      const nextPrice = quote.mark ?? quote.last;
+      this.optionSnapshots.set(quote.occSymbol, {
+        quote,
+        stale: false,
+        revision: (previous?.revision ?? 0) + 1,
+        flash: previousPrice === null || previousPrice === undefined || nextPrice === null
+          ? null
+          : nextPrice > previousPrice ? "up" : nextPrice < previousPrice ? "down" : null,
+      });
       changed.add(quote.occSymbol);
     }
     for (const occSymbol of changed) {
@@ -183,9 +208,16 @@ export class QuoteStore {
   }
 
   private saveQuote(quote: Quote): void {
-    const history = this.snapshots.get(quote.symbol)?.history ?? [];
+    const previous = this.snapshots.get(quote.symbol);
+    const history = previous?.history ?? [];
     const nextHistory = [...history, quote.last].slice(-32);
-    this.snapshots.set(quote.symbol, { quote, stale: false, history: nextHistory });
+    this.snapshots.set(quote.symbol, {
+      quote,
+      stale: false,
+      history: nextHistory,
+      revision: (previous?.revision ?? 0) + 1,
+      flash: previous ? quote.last > previous.quote.last ? "up" : quote.last < previous.quote.last ? "down" : null : null,
+    });
   }
 
   private refreshStatusSnapshot(): void {

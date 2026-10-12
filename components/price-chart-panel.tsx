@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
   AreaSeries,
@@ -604,6 +605,8 @@ export function PriceChartPanel({
           {quoteSnapshot?.stale && <span className="rounded bg-amber-400/10 px-1 py-0.5 text-[9px] text-amber-300">STALE</span>}
           {latestQuote?.dataType === "delayed" && <span className="rounded bg-amber-400/10 px-1 py-0.5 text-[9px] text-amber-300">DELAYED</span>}
           {latestQuote?.dataType === "frozen" && <span className="rounded bg-slate-500/20 px-1 py-0.5 text-[9px] text-slate-400">FROZEN</span>}
+          <Link className="rounded border border-[var(--border)] px-2 py-1 text-[9px] text-slate-400 hover:text-emerald-300"
+            href={`/alerts?create=1&symbol=${encodeURIComponent(config.symbol)}&assetClass=${latestQuote?.type === "option" ? "option" : latestQuote?.type === "future" ? "future" : "equity"}`}>Create alert</Link>
         </div>
         <div className="flex flex-wrap items-center gap-1">
           <select aria-label="Chart type" value={config.type} onChange={(event) => updateConfig({ type: chartTypeSchema.parse(event.target.value) })} className="h-7 rounded border border-[var(--border)] bg-[#0a0d11] px-2 text-[10px]">
